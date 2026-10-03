@@ -490,6 +490,7 @@
       g.position.set(c.position.x + Math.sin(ry) * 1.05, 0, c.position.z + Math.cos(ry) * 1.05);
       g.rotation.y = ry;
       scene.add(g);
+      return g;
     }
 
     // Layout meja huruf U, terbuka ke kamera (+z). ry = arah hadap:
