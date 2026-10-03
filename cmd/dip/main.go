@@ -234,15 +234,11 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		"symbol": symbol, "qty": f6(filledS6), "avg": f6(avgS6)}))
 	lf("FILLED %s @ %s", f6(filledS6), f6(avgS6))
 
+	// SL server-side tidak dipakai lagi: trigger SL mereserve base sehingga
+	// TP limit sell selalu kena "Insufficient funds" (terbukti live 12:42 UTC).
+	// SL dipindah ke sisi bot: cek mid tiap ~6 dtk di loop hold di bawah.
+	slID := ""
 	slPrice := tickAlign(float64(avgS6)*(1-float64(envI("DIP_SL_BPS", 120))/10000), info.TickTicks)
-	slCoid := fmt.Sprintf("dip-sl-%d-%d", time.Now().UnixNano()%1e9, cycleNo)
-	slID, err := armStopLoss(ctx, symbol, slPrice, filledS6, slCoid, info)
-	if err != nil {
-		lf("WARNING SL gagal dipasang (%v) - exit manual jadi pengaman", err)
-		slID = ""
-	} else {
-		lf("SL armed @ %s", f6(slPrice))
-	}
 
 	targetS6 := tickAlign(float64(avgS6)*(1+float64(target)/10000), info.TickTicks)
 	sellCoid := fmt.Sprintf("dip-s-%d-%d", time.Now().UnixNano()%1e9, cycleNo)
@@ -284,20 +280,34 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 			}
 		}
 		slChecked++
-		if slID != "" && slChecked%3 == 0 {
-			if stsl, gerr := client.Triggers.Get(ctx, nil, slID, nil); gerr == nil && stsl != nil {
-				if stsl.Status == "completed" || stsl.Status == "failed" {
-					lf("SL tereksekusi server-side - rugi terbatas")
-					bookCycle(symbol, avgS6, filledS6, slPrice, "stop_loss", 0.001, 0.0015)
+		if slChecked%3 == 0 {
+			if b2, a2, berr := bookTop(ctx, info); berr == nil {
+				if (b2+a2)/2 <= float64(slPrice)/1e6 {
+					cancelOrder(ctx, symbol, sellCoid)
+					time.Sleep(400 * time.Millisecond)
+					remaining := filledS6
+					if st2, gerr := orderSnapshot(ctx, symbol, sellCoid); gerr == nil {
+						remaining = filledS6 - st2.cum
+					}
+					if remaining >= info.MinQtyS6 {
+						lf("SL bot-side kena (mid <= %s) - taker exit %s", f6(slPrice), f6(remaining))
+						return takerExit(ctx, symbol, remaining, avgS6, targetS6, slID)
+					}
+					lf("SL bot-side kena, sisa %s di bawah min qty - selesai", f6(remaining))
 					return nil
 				}
 			}
 		}
 		if time.Since(started) > maxHold {
-			cancelTrigger(slID)
 			cancelOrder(ctx, symbol, sellCoid)
-			lf("max hold tercapai - taker exit")
-			return takerExit(ctx, symbol, filledS6, avgS6, targetS6, slID)
+			time.Sleep(400 * time.Millisecond)
+			remaining := filledS6
+			if st2, gerr := orderSnapshot(ctx, symbol, sellCoid); gerr == nil {
+				remaining = filledS6 - st2.cum
+			}
+			cancelTrigger(slID)
+			lf("max hold tercapai - taker exit %s", f6(remaining))
+			return takerExit(ctx, symbol, remaining, avgS6, targetS6, slID)
 		}
 	}
 }
