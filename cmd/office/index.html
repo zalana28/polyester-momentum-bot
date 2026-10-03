@@ -115,6 +115,7 @@
       SWEEP_BLEND: 2.0,                   // detik lerp masuk sapuan
       FOCUS_DURATION: 1.5, FOCUS_HOLD: 6,
       FOCUS_CAM_DISTANCE: 9, FOCUS_CAM_HEIGHT: 6,
+      FACE_ANGLE_MIN: 25, FACE_ANGLE_MAX: 60, // derajat wajah terlihat 3/4
       DEBUG: true,
     };
 
@@ -307,11 +308,11 @@
     // arah hadap karakter & monitor = (-sin ry, 0, -cos ry).
     const DESK_LAYOUT = [
       { id:'trader',   x:-8.5,  z:-0.75, ry:-Math.PI/2 },   // lengan kiri  -> hadap +x
-      { id:'momentum', x: 8.5,  z:-0.75, ry: Math.PI/2 },   // lengan kanan -> hadap -x
+      { id:'momentum', x: 8.5,  z:-0.75, ry: 160*Math.PI/180 }, // lengan kanan, diputar 72° ke kamera -> 47.5°
       { id:'risk',     x:-5.5,  z:-6.25, ry: Math.PI },     // sisi dalam kiri  -> hadap +z (kamera)
       { id:'brain',    x: 0,    z:-6.25, ry: Math.PI },     // sisi dalam tengah -> hadap +z
       { id:'janitor',  x: 5.5,  z:-6.25, ry: Math.PI },     // sisi dalam kanan -> hadap +z
-      { id:'boss',     x:10.75, z:-8.5,  ry: Math.PI*0.6 }, // kepala meja, sudut kanan-jauh -> diagonal ke kamera
+      { id:'boss',     x:12,    z:-9.5,  ry: 156*Math.PI/180 }, // kepala meja -> 39.9°; digeser agar meja tak tabrak Security
     ];
     const ROLES = {
       trader:   { head:0xffd9b0, shirt:0x60a5fa, name:'Dip Trader' },
@@ -536,7 +537,20 @@
     }
     loop();
 
-    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG };
+    function faceAngles() {
+      const rows = DESK_LAYOUT.map(d => {
+        const a = team[d.id];
+        const f = new THREE.Vector3(-Math.sin(a.rotation.y), 0, -Math.cos(a.rotation.y));
+        const toCam = new THREE.Vector3(cam.position.x - a.position.x, 0, cam.position.z - a.position.z).normalize();
+        const ang = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(f.dot(toCam), -1, 1)));
+        return { agent: d.id, rotY_deg: Math.round(THREE.MathUtils.radToDeg(a.rotation.y)),
+                 face_angle_deg: +ang.toFixed(1),
+                 ok: ang >= CONFIG.FACE_ANGLE_MIN && ang <= CONFIG.FACE_ANGLE_MAX };
+      });
+      console.table(rows);
+      return rows;
+    }
+    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles };
 
   </script>
 </body></html>
