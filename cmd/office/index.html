@@ -90,6 +90,11 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+    import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 
     const D = document;
     const container = D.getElementById('canvas-container');
@@ -142,8 +147,20 @@
       STATE_THINKING_MS: 6000, STATE_ACTING_MS: 4000, STATE_ALERT_MS: 8000,
       THINK_TILT: 0.22, LEGACY_AUTO_TYPING: false,
       FOCUS_USER_IDLE_MS: 10000, FOCUS_COOLDOWN_MS: 25000,
+      ENABLE_POSTFX: true, ENABLE_BLOOM: true, ENABLE_AO: true,
+      POSTFX_MAX_PIXEL_RATIO: 1.5,
+      BLOOM_STRENGTH: 0.35, BLOOM_RADIUS: 0.6, BLOOM_THRESHOLD: 1.8,
+      GLOW_EMISSIVE: 2.5,
+      AO_RADIUS: 2.5, AO_INTENSITY: 1.0,
+      FPS_FALLBACK: 24,
       DEBUG: true,
     };
+
+    const glowRegistry = []; // { label, mat } — sumber glow utk bloomProbe
+    const skylineDotMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffd97a, emissiveIntensity: 2.5 });
+    const lampBulbMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, emissive: 0xffedc2, emissiveIntensity: 2.5 });
+    const coffeeLedMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x22ff88, emissiveIntensity: 2.5 });
+    const holoMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x7dd3fc, emissiveIntensity: 2.0, wireframe: true });
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(CONFIG.BG_COLOR);
@@ -222,8 +239,8 @@
         const bx = -w/2 + 0.6 + i * (w - 1.2) / (n - 1);
         box(bw, bh, 0.25, 0x3a4a6b, bx, -h/2 + bh/2 + 0.15, 0.12, g);
         if (rnd() > 0.45) {
-          const w2 = box(0.14, 0.14, 0.06, 0xffd97a, bx + (rnd()-0.5)*0.35, -h/2 + 0.6 + rnd()*(bh-0.9), 0.27, g);
-          w2.material = new THREE.MeshBasicMaterial({ color: 0xffd97a });
+          const w2 = box(0.14, 0.14, 0.06, 0x000000, bx + (rnd()-0.5)*0.35, -h/2 + 0.6 + rnd()*(bh-0.9), 0.27, g);
+          w2.material = skylineDotMat;
         }
       }
       box(w+0.5, 0.3, 0.2, 0xe8e2d4, 0, h/2+0.12, 0.05, g);
@@ -237,7 +254,8 @@
     // wallScreen placeholder (isi nyata di Fase 7) — sisi kepala meja, kanan-atas
     const wallScreenGroup = new THREE.Group();
     box(9.6, 4.8, 0.18, 0x232a3d, 0, 0, 0, wallScreenGroup); // bingkai
-    const wsMat = new THREE.MeshBasicMaterial({ color: 0x101a2e });
+    const wsMat = new THREE.MeshStandardMaterial({ color: 0x05070d, emissive: 0x9db8ff, emissiveIntensity: 0.45 });
+    glowRegistry.push({ label: 'wallScreen-placeholder', mat: wsMat });
     const wsPlane = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 4.2), wsMat);
     wsPlane.position.z = 0.11; wsPlane.name = 'wallScreen';
     wallScreenGroup.add(wsPlane);
@@ -297,8 +315,9 @@
     const cof = new THREE.Group(); cof.name = 'coffee';
     box(3.2, 0.25, 1.6, 0xfefae0, 0, 1.7, 0, cof); box(0.25, 1.7, 1.4, 0xfaedcd, -1.45, 0.85, 0, cof); box(0.25, 1.7, 1.4, 0xfaedcd, 1.45, 0.85, 0, cof);
     box(1.0, 1.3, 0.9, 0x334155, -0.7, 2.5, 0, cof); box(0.8, 0.5, 0.7, 0xd9a13b, 0.7, 2.1, 0, cof);
-    const led = box(0.14, 0.14, 0.08, 0x22ff88, -0.45, 2.95, 0.48, cof);
-    led.material = new THREE.MeshBasicMaterial({ color: 0x22ff88 });
+    const led = box(0.14, 0.14, 0.08, 0x000000, -0.45, 2.95, 0.48, cof);
+    led.material = coffeeLedMat;
+    glowRegistry.push({ label: 'coffee-led', mat: led.material });
     cof.traverse(o => { o.castShadow = false; });
     cof.position.set(-16.5, 0, 6); props.add(cof);
 
@@ -319,8 +338,9 @@
       box(1.1, 0.12, 1.1, 0x334155, 0, 0.06, 0, g);
       box(0.09, 5.2, 0.09, 0x8a94a8, 0, 2.7, 0, g);
       box(1.3, 0.5, 1.3, 0x2f3b52, 0, 5.55, 0, g);
-      const bulb = box(1.0, 0.14, 1.0, 0xffedc2, 0, 5.32, 0, g);
-      bulb.material = new THREE.MeshBasicMaterial({ color: 0xffedc2 });
+      const bulb = box(1.0, 0.14, 1.0, 0x0a0a0a, 0, 5.32, 0, g);
+      bulb.material = lampBulbMat;
+      glowRegistry.push({ label: 'lamp-bulb', mat: bulb.material });
       g.position.set(x, 0, z); scene.add(g);
       const l = new THREE.PointLight(CONFIG.LIGHT_LAMP_COLOR, CONFIG.LIGHT_LAMP_INTENSITY, CONFIG.LIGHT_LAMP_DISTANCE, 2);
       l.position.set(x, 5.0, z); scene.add(l);
@@ -333,8 +353,10 @@
       box(0.3, 1.5, 2.4, 0xfaedcd, -2.3, 0.75, 0, g); // leg L
       box(0.3, 1.5, 2.4, 0xfaedcd, 2.3, 0.75, 0, g); // leg R
       box(2.0, 1.3, 0.15, 0x334155, 0, 2.5, -0.6, g); // dark bezel monitor
-      const scr = box(1.8, 1.1, 0.05, 0xbae6fd, 0, 2.5, -0.52, g); // light cyan screen
-      scr.name = 'screen';
+      const scrMat = new THREE.MeshStandardMaterial({ color: 0x0a0f1a, emissive: 0xbfe9ff, emissiveIntensity: 2.5 });
+      glowRegistry.push({ label: 'monitor-screen', mat: scrMat });
+      const scr = new THREE.Mesh(geoBox(1.8, 1.1, 0.05), scrMat); // layar glow
+      scr.position.set(0, 2.5, -0.52); scr.castShadow = true; scr.receiveShadow = true; scr.name = 'screen'; g.add(scr);
       g.position.set(x, 0, z);
       g.rotation.y = rot;
       scene.add(g);
@@ -490,11 +512,12 @@
       c.userData.desk = desk(d.x + fx*1.9, d.z + fz*1.9, d.ry);
       c.userData.chair = chair(c, d.ry);
       c.userData.screen = c.userData.desk.getObjectByName('screen');
-      c.userData.screenOrig = c.userData.screen.material.color.getHex();
+      c.userData.screenEmissive = 0xbfe9ff;
       addMonitorGlow(d.x + fx*1.0, d.z + fz*1.0);
       floorLamp(d.x - Math.cos(d.ry)*2.6, d.z + Math.sin(d.ry)*2.6, d.id);
       if (d.id === 'brain') {
-        const h = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45), new THREE.MeshBasicMaterial({ color: 0x7dd3fc, wireframe: true }));
+        const h = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45), holoMat);
+        glowRegistry.push({ label: 'hologram', mat: h.material });
         h.name = 'hologram'; h.position.set(3.2, 1.5, 0.2); h.castShadow = false;
         c.userData.desk.add(h);
         hologram = h;
@@ -546,7 +569,8 @@
     // Ring status per agent (geometri bersama, material per agent)
     DESK_LAYOUT.forEach(d => {
       const a = team[d.id];
-      const m = new THREE.MeshBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
+      const m = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x64748b, emissiveIntensity: 0.9, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
+      glowRegistry.push({ label: 'ring-' + d.id, mat: m });
       const ring = new THREE.Mesh(ringGeoShared, m);
       ring.rotation.x = -Math.PI / 2; ring.renderOrder = 20;
       const cp = a.userData.chair.position;
@@ -563,7 +587,7 @@
     let lastFocusAt = -1e9;
     // tinggi ring: di atas lapisan teratas di bawahnya (karpet inner top 0.37, logo 0.45; lantai 0.25)
     function ringY(x, z) { return (Math.abs(x) <= 15 && z >= -5.5 && z <= 12.5) ? 0.47 : 0.30; }
-    function restoreScreen(st) { if (st.screen) st.screen.material.color.setHex(st.screenOrig); }
+    function restoreScreen(st) { if (st.screen) st.screen.material.emissive.setHex(st.screenEmissive); }
     function tryFocus(agentId) {
       const now = performance.now();
       if (focusState.active) return;
@@ -583,23 +607,23 @@
       if (state === 'idle') {
         u.isWorking = CONFIG.LEGACY_AUTO_TYPING === true;
         hideBubble(agentId); setLabelActive(agentId, false);
-        st.ringMat.color.setHex(0x64748b); st.ringMat.opacity = 0.35;
+        st.ringMat.emissive.setHex(0x64748b); st.ringMat.emissiveIntensity = 0.9; st.ringMat.opacity = 0.35;
         restoreScreen(st); u.thinkTilt = 0;
       } else if (state === 'thinking') {
         u.isWorking = false;
         showBubble(agentId, '...', 'think');
-        st.ringMat.color.setHex(0xfacc15); st.ringMat.opacity = 0.8;
+        st.ringMat.emissive.setHex(0xfacc15); st.ringMat.emissiveIntensity = 1.2; st.ringMat.opacity = 0.8;
         restoreScreen(st); setLabelActive(agentId, true); u.thinkTilt = u.thinkTilt || 0;
       } else if (state === 'acting') {
         u.isWorking = true;
         showBubble(agentId, text, 'info');
-        st.ringMat.color.setHex(0x10b981); st.ringMat.opacity = 0.85;
+        st.ringMat.emissive.setHex(0x10b981); st.ringMat.emissiveIntensity = 1.4; st.ringMat.opacity = 0.85;
         setLabelActive(agentId, true); restoreScreen(st);
         if (opts.focus) tryFocus(agentId);
       } else if (state === 'alert') {
         u.isWorking = false;
         showBubble(agentId, text || 'ALERT', 'alert');
-        st.ringMat.color.setHex(0xff5d5d); setLabelActive(agentId, true);
+        st.ringMat.emissive.setHex(0xff5d5d); st.ringMat.emissiveIntensity = 2.0; setLabelActive(agentId, true);
         if (opts.focus) tryFocus(agentId);
       }
     }
@@ -608,7 +632,7 @@
       const rows = DESK_LAYOUT.map(d => {
         const st = agentStates[d.id];
         return { agent: d.id, state: st.state, sisa_ms: Math.max(0, Math.round(st.until - now)),
-                 ring: st.ringMat.color.getHexString(),
+                 ring: st.ringMat.emissive.getHexString(),
                  monitor: st.screen ? (st.screen.material.color.getHex() === st.screenOrig ? 'normal' : 'flicker') : '-' };
       });
       console.table(rows); return rows;
@@ -840,13 +864,35 @@
       cam.aspect = window.innerWidth / window.innerHeight;
       cam.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      if (composer) composer.setSize(window.innerWidth, window.innerHeight);
       labelRenderer.setSize(window.innerWidth, window.innerHeight);
     });
 
     // Animation Loop
+    // ---- Post-processing (Fase 6): RenderPass -> SSAO -> Bloom -> OutputPass ----
+    // AO: SSAOPass (stabil di r160; GTAOPass baru masuk r160 & belum stabil).
+    // Tone mapping/sRGB diterapkan SEKALI oleh OutputPass (renderer hanya set mode).
+    let composer = null, aoPass = null, bloomPass = null;
+    if (CONFIG.ENABLE_POSTFX) {
+      const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+      const rt = new THREE.WebGLRenderTarget(size.x, size.y, { samples: renderer.capabilities.isWebGL2 ? 4 : 0, type: THREE.HalfFloatType });
+      composer = new EffectComposer(renderer, rt);
+      composer.setPixelRatio(CONFIG.POSTFX_MAX_PIXEL_RATIO);
+      composer.setSize(window.innerWidth, window.innerHeight);
+      composer.addPass(new RenderPass(scene, cam));
+      aoPass = new SSAOPass(scene, cam, window.innerWidth, window.innerHeight);
+      aoPass.kernelRadius = CONFIG.AO_RADIUS;
+      composer.addPass(aoPass);
+      bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), CONFIG.BLOOM_STRENGTH, CONFIG.BLOOM_RADIUS, CONFIG.BLOOM_THRESHOLD);
+      bloomPass.enabled = CONFIG.ENABLE_BLOOM;
+      composer.addPass(bloomPass);
+      composer.addPass(new OutputPass());
+    }
+
     const clock = new THREE.Clock();
     let animPaused = false;
     let fpsFrames = 0, fpsLast = performance.now(), fpsDiv = null;
+    let fpsAccum = [], aoFallbackDone = false;
     if (CONFIG.DEBUG) {
       fpsDiv = D.createElement('div');
       fpsDiv.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.8);color:#a5f3fc;font:700 12px "JetBrains Mono",monospace;padding:3px 10px;border-radius:10px;z-index:30;pointer-events:none';
@@ -859,7 +905,20 @@
       if (CONFIG.DEBUG && fpsDiv) {
         fpsFrames++;
         const nw = performance.now();
-        if (nw - fpsLast > 500) { fpsDiv.textContent = Math.round(fpsFrames * 1000 / (nw - fpsLast)) + ' FPS'; fpsFrames = 0; fpsLast = nw; }
+        if (nw - fpsLast > 500) {
+          const fps = Math.round(fpsFrames * 1000 / (nw - fpsLast));
+          fpsDiv.textContent = fps + ' FPS · ' + (CONFIG.ENABLE_POSTFX && composer ? ('postfx on · ao ' + (aoPass.enabled ? 'on' : 'OFF')) : 'postfx off');
+          fpsFrames = 0; fpsLast = nw;
+          fpsAccum.push(fps);
+          if (fpsAccum.length > 6) fpsAccum.shift();
+          if (CONFIG.ENABLE_POSTFX && !aoFallbackDone && aoPass && aoPass.enabled && fpsAccum.length >= 6) {
+            const avg = fpsAccum.reduce((a2, b2) => a2 + b2, 0) / fpsAccum.length;
+            if (avg < CONFIG.FPS_FALLBACK) {
+              aoPass.enabled = false; aoFallbackDone = true;
+              console.warn('[office] avg FPS ' + avg.toFixed(0) + ' < ' + CONFIG.FPS_FALLBACK + ' — AO dimatikan otomatis (bloom dipertahankan)');
+            }
+          }
+        }
       }
       if (!animPaused) {
         Object.values(team).forEach(c => {
@@ -875,8 +934,8 @@
           if (st) {
             if (st.state !== 'idle' && performance.now() > st.until) setAgentState(u.id, 'idle');
             if (st.state === 'alert') {
-              st.ringMat.opacity = 0.5 + 0.4 * Math.abs(Math.sin(t * 6));
-              if (st.screen) st.screen.material.color.setHex(Math.sin(t * 10) > 0 ? 0xff5d5d : st.screenOrig);
+              st.ringMat.emissiveIntensity = 1.0 + 1.5 * Math.abs(Math.sin(t * 6));
+              if (st.screen) st.screen.material.emissive.setHex(Math.sin(t * 10) > 0 ? 0xff4444 : st.screenEmissive);
             }
             const tiltTarget = st.state === 'thinking' ? CONFIG.THINK_TILT : 0;
             u.thinkTilt = (u.thinkTilt || 0) + (tiltTarget - (u.thinkTilt || 0)) * Math.min(1, dt * 5);
@@ -927,7 +986,8 @@
           if (fl.life <= 0) { scene.remove(fl.sp); floaters.splice(i, 1); } }
         updateCameraRig(dt);
       }
-      renderer.render(scene, cam);
+      if (CONFIG.ENABLE_POSTFX && composer) composer.render();
+      else renderer.render(scene, cam);
       labelRenderer.render(scene, cam);
     }
     loop();
@@ -1005,7 +1065,32 @@
       console.table(rows);
       return rows;
     }
-    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react, setAgentState, getStates, debugDemo, stopDemo };
+    function setPostfx(o = {}) {
+      if (o.ao !== undefined && aoPass) aoPass.enabled = o.ao;
+      if (o.bloom !== undefined && bloomPass) bloomPass.enabled = o.bloom;
+      if (o.strength !== undefined && bloomPass) bloomPass.strength = o.strength;
+      if (o.radius !== undefined && bloomPass) bloomPass.radius = o.radius;
+      if (o.threshold !== undefined && bloomPass) bloomPass.threshold = o.threshold;
+      if (o.aoRadius !== undefined && aoPass) aoPass.kernelRadius = o.aoRadius;
+      if (o.aoIntensity !== undefined) {
+        if ('intensity' in aoPass) aoPass.intensity = o.aoIntensity;
+        else console.warn('aoIntensity tidak didukung SSAOPass r160 — gunakan aoRadius');
+      }
+    }
+    function togglePass(which, on) {
+      if (which === 'ao' && aoPass) aoPass.enabled = on;
+      if (which === 'bloom' && bloomPass) bloomPass.enabled = on;
+      if (which === 'all') CONFIG.ENABLE_POSTFX = !!on;
+    }
+    function bloomProbe() {
+      if (!bloomPass) return console.warn('postfx nonaktif');
+      const prev = bloomPass.strength;
+      bloomPass.strength = 3;
+      console.warn('bloomProbe: strength 3 selama 3 dtk — amati objek yang menyala');
+      console.table(glowRegistry.map(g2 => ({ material: g2.label, emissiveIntensity: g2.mat.emissiveIntensity })));
+      setTimeout(() => { bloomPass.strength = prev; console.warn('bloomProbe selesai — strength dikembalikan'); }, 3000);
+    }
+    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react, setAgentState, getStates, debugDemo, stopDemo, setPostfx, togglePass, bloomProbe };
 
   </script>
 </body></html>
