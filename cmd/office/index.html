@@ -74,6 +74,7 @@
 
   <script type="module">
     import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
     const D = document;
     const container = D.getElementById('canvas-container');
@@ -101,13 +102,27 @@
       COLOR_CARPET: 0xc4d49b,        // sage sedikit lebih pekat
       COLOR_WALL_BACK: 0xf6f1e4,
       COLOR_WALL_SIDE: 0xefeadd,
+      // kamera & kontrol (Fase 2)
+      CAMERA_FOV: 38, CAMERA_FAR: 200,
+      CAMERA_START: [21.8, 23.0, 24.8],   // posisi lama: az 0.72, dist 33, h 23
+      CAMERA_TARGET: [0, 1.2, 3.5],       // tengah meja — sesuaikan lagi pas layout U
+      ORBIT_DAMPING: 0.06,
+      ORBIT_MIN_POLAR: 0.6, ORBIT_MAX_POLAR: 1.35,
+      ORBIT_MIN_DIST: 8, ORBIT_MAX_DIST: 70,
+      AUTO_IDLE_DELAY: 15,                // detik tanpa interaksi sebelum sapuan
+      AUTO_SWEEP_ANGLE: 25 * Math.PI / 180,
+      AUTO_SWEEP_SPEED: 0.35,             // rad/s fase sinus (setengah ayun ~9 dtk)
+      SWEEP_BLEND: 2.0,                   // detik lerp masuk sapuan
+      FOCUS_DURATION: 1.5, FOCUS_HOLD: 6,
+      FOCUS_CAM_DISTANCE: 9, FOCUS_CAM_HEIGHT: 6,
     };
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(CONFIG.BG_COLOR);
     scene.fog = new THREE.Fog(CONFIG.BG_COLOR, CONFIG.FOG_NEAR, CONFIG.FOG_FAR);
 
-    const cam = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 500);
+    const cam = new THREE.PerspectiveCamera(CONFIG.CAMERA_FOV, window.innerWidth / window.innerHeight, 0.1, CONFIG.CAMERA_FAR);
+    cam.position.set(...CONFIG.CAMERA_START);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -345,27 +360,85 @@
     }
     setInterval(poll,2000);poll();
 
-    // Camera Setup
-    let ang = 0.72, dist = 33, height = 23, drag = false, px = 0;
-    updateCam();
+    // ---- Camera rig (Fase 2): OrbitControls + idle sweep + agent focus ----
+    const controls = new OrbitControls(cam, renderer.domElement);
+    controls.target.set(...CONFIG.CAMERA_TARGET);
+    controls.enableDamping = true;
+    controls.dampingFactor = CONFIG.ORBIT_DAMPING;
+    controls.minPolarAngle = CONFIG.ORBIT_MIN_POLAR;
+    controls.maxPolarAngle = CONFIG.ORBIT_MAX_POLAR;
+    controls.minDistance = CONFIG.ORBIT_MIN_DIST;
+    controls.maxDistance = CONFIG.ORBIT_MAX_DIST;
+    controls.enablePan = false;
+    controls.update();
 
-    window.addEventListener('mousedown', e => { drag = true; px = e.clientX; });
-    window.addEventListener('mouseup', () => drag = false);
-    window.addEventListener('mousemove', e => {
-      if (drag) {
-        ang += (e.clientX - px) * 0.005;
-        px = e.clientX;
-        updateCam();
-      }
+    let lastInteraction = performance.now();
+    const sweep = { on: false, phase: 0, elapsed: 0, startAz: 0 };
+    const focusState = { active: false, phase: null, t0: 0, dur: 0, holdUntil: 0,
+      fromPos: new THREE.Vector3(), toPos: new THREE.Vector3(),
+      fromTgt: new THREE.Vector3(), toTgt: new THREE.Vector3() };
+    const _camOff = new THREE.Vector3(), _camSph = new THREE.Spherical();
+    function easeInOutCubic(x) { return x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x + 2, 3) / 2; }
+
+    controls.addEventListener('start', () => {
+      lastInteraction = performance.now();
+      sweep.on = false;
+      focusState.active = false; // mulai drag = batalkan fokus
     });
-    window.addEventListener('wheel', e => {
-      dist = Math.min(90, Math.max(25, dist + e.deltaY * 0.02));
-      updateCam();
-    }, { passive: true });
 
-    function updateCam() {
-      cam.position.set(Math.sin(ang) * dist, height, Math.cos(ang) * dist);
-      cam.lookAt(0, 2, 3);
+    function focusOnAgent(agentId, duration = CONFIG.FOCUS_DURATION) {
+      if (focusState.active) return;
+      const agent = team[agentId];
+      if (!agent) return;
+      const ap = agent.position;
+      const dir = new THREE.Vector3(CONFIG.CAMERA_START[0] - ap.x, 0, CONFIG.CAMERA_START[2] - ap.z);
+      if (dir.lengthSq() < 0.01) dir.set(0, 0, 1);
+      dir.normalize();
+      focusState.active = true; focusState.phase = 'to'; focusState.t0 = performance.now();
+      focusState.dur = duration * 1000;
+      focusState.fromPos.copy(cam.position);
+      focusState.fromTgt.copy(controls.target);
+      focusState.toPos.set(ap.x + dir.x * CONFIG.FOCUS_CAM_DISTANCE, CONFIG.FOCUS_CAM_HEIGHT, ap.z + dir.z * CONFIG.FOCUS_CAM_DISTANCE);
+      focusState.toTgt.set(ap.x, 1.8, ap.z);
+    }
+
+    function updateCameraRig(dt) {
+      if (focusState.active) {
+        const now = performance.now();
+        if (focusState.phase === 'to') {
+          const k = Math.min(1, (now - focusState.t0) / focusState.dur), e = easeInOutCubic(k);
+          cam.position.lerpVectors(focusState.fromPos, focusState.toPos, e);
+          controls.target.lerpVectors(focusState.fromTgt, focusState.toTgt, e);
+          if (k >= 1) { focusState.phase = 'hold'; focusState.holdUntil = now + CONFIG.FOCUS_HOLD * 1000; }
+        } else if (focusState.phase === 'hold') {
+          if (now >= focusState.holdUntil) {
+            focusState.phase = 'back'; focusState.t0 = now;
+            focusState.fromPos.copy(cam.position); focusState.fromTgt.copy(controls.target);
+            focusState.toPos.set(...CONFIG.CAMERA_START); focusState.toTgt.set(...CONFIG.CAMERA_TARGET);
+          }
+        } else {
+          const k = Math.min(1, (now - focusState.t0) / focusState.dur), e = easeInOutCubic(k);
+          cam.position.lerpVectors(focusState.fromPos, focusState.toPos, e);
+          controls.target.lerpVectors(focusState.fromTgt, focusState.toTgt, e);
+          if (k >= 1) focusState.active = false;
+        }
+        controls.update();
+      } else {
+        const idle = performance.now() - lastInteraction > CONFIG.AUTO_IDLE_DELAY * 1000;
+        if (idle && !sweep.on) { sweep.on = true; sweep.phase = 0; sweep.elapsed = 0; sweep.startAz = controls.getAzimuthalAngle(); }
+        if (!idle && sweep.on) sweep.on = false;
+        if (sweep.on) {
+          sweep.elapsed += dt;
+          sweep.phase += dt * CONFIG.AUTO_SWEEP_SPEED;
+          const blend = easeInOutCubic(Math.min(1, sweep.elapsed / CONFIG.SWEEP_BLEND));
+          _camOff.copy(cam.position).sub(controls.target);
+          _camSph.setFromVector3(_camOff);
+          _camSph.theta = sweep.startAz + CONFIG.AUTO_SWEEP_ANGLE * Math.sin(sweep.phase) * blend;
+          _camOff.setFromSpherical(_camSph);
+          cam.position.copy(controls.target).add(_camOff);
+        }
+        controls.update(dt);
+      }
     }
 
     window.addEventListener('resize', () => {
@@ -378,6 +451,7 @@
     const clock = new THREE.Clock();
     function loop() {
       requestAnimationFrame(loop);
+      const dt = Math.min(clock.getDelta(), 0.05);
       const t = clock.getElapsedTime();
 
       Object.values(team).forEach(c => {
@@ -400,6 +474,8 @@
       for (let i = floaters.length - 1; i >= 0; i--) { const f = floaters[i]; f.life -= 0.016;
         f.sp.position.y += 0.02; f.sp.material.opacity = Math.min(1, f.life);
         if (f.life <= 0) { scene.remove(f.sp); floaters.splice(i, 1); } }
+
+      updateCameraRig(dt);
 
       renderer.render(scene, cam);
     }
