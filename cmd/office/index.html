@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Kantor AI — Tim Trading Bot</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#141824;font-family:-apple-system,'Segoe UI',sans-serif}
+  #ui{position:fixed;left:16px;top:14px;color:#fff;text-shadow:0 2px 6px #000a;z-index:5;pointer-events:none}
+  #ui h1{font-size:20px;margin:0 0 4px}
+  #ui .pnl{font-size:30px;font-weight:800}
+  #feed{position:fixed;right:16px;top:14px;width:330px;max-height:70vh;overflow:hidden;z-index:5;pointer-events:none}
+  .fitem{background:#ffffff14;color:#eef;border-radius:8px;padding:5px 9px;margin-bottom:5px;font-size:12px;backdrop-filter:blur(4px)}
+  .fitem b{color:#ffd54a}
+  #help{position:fixed;bottom:10px;left:16px;color:#ffffff66;font-size:11px;z-index:5}
+</style>
+</head>
+<body>
+<div id="ui">
+  <h1>🏢 Kantor AI — Tim Trading Bot</h1>
+  <div>PnL total strategi: <span class="pnl" id="pnl">$0.00</span></div>
+  <div id="wl">siklus 0 · ✓0 ✗0</div>
+</div>
+<div id="feed"></div>
+<div id="help">geser mouse = putar kamera · scroll = zoom · server read-only, bot tidak terganggu</div>
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script>
+const W=window, D=document;
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x141824);
+scene.fog=new THREE.Fog(0x141824,60,140);
+const cam=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.1,300);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);
+D.body.appendChild(renderer.domElement);
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+scene.add(new THREE.AmbientLight(0xbcd0ff,1.1));
+const sun=new THREE.DirectionalLight(0xffffff,1.6);sun.position.set(18,30,12);scene.add(sun);
+
+// ---- lantai + dekorasi ----
+const mat=(c)=>new THREE.MeshLambertMaterial({color:c});
+const box=(w,h,d,c,x,y,z,parent)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(c));m.position.set(x,y,z);(parent||scene).add(m);return m};
+box(60,0.5,44,0x2b3350,0,0,0);                       // lantai
+box(60,0.2,44,0x3a4470,0,0.26,0);                    // karpet kerja
+for(let i=0;i<8;i++){ box(3,0.4,1.2,0x8a5a33,-24+i*6.8,-0.1,-20); box(1.6,2.6,1.2,0xa06a3d,-24+i*6.8,1.2,-20);} // rak kayu
+box(14,9,0.6,0xf4f0e6,0,4.5,-21);                    // dinding belakang
+box(5,3,0.1,0x9fd8ff,-3,5,-20.6);box(5,3,0.1,0x9fd8ff,3,5,-20.6); // layar
+
+// ---- meja + komputer ----
+function desk(x,z,rot){
+  const g=new THREE.Group();
+  box(4.6,0.3,2.2,0xd9c9a8,0,1.5,0,g);
+  box(0.3,1.5,2,0xb8a683,-2.1,0.75,0,g);box(0.3,1.5,2,0xb8a683,2.1,0.75,0,g);
+  box(1.6,1,0.12,0x22283e,0,2.35,-0.5,g);            // monitor
+  box(1.4,0.8,0.05,0x7fe3ff,0,2.35,-0.42,g);         // layar nyala
+  g.position.set(x,0,z);g.rotation.y=rot;scene.add(g);return g;
+}
+
+// ---- karakter voxel ----
+function character(x,z,color,shirt,name){
+  const g=new THREE.Group();
+  box(0.9,0.9,0.9,color,0,2.35,0,g);                 // kepala
+  box(1.0,1.3,0.65,shirt,0,1.25,0,g);                // badan
+  box(0.28,0.9,0.28,shirt,-0.66,1.35,0,g).name='armL';
+  box(0.28,0.9,0.28,shirt,0.66,1.35,0,g).name='armR';
+  box(0.32,0.55,0.32,0x2b2b3a,-0.25,0.28,0,g);box(0.32,0.55,0.32,0x2b2b3a,0.25,0.28,0,g);
+  const cv=D.createElement('canvas');cv.width=256;cv.height=64;
+  const cx=cv.getContext('2d');cx.fillStyle='#101322cc';cx.fillRect(0,0,256,64);
+  cx.fillStyle='#ffe27a';cx.font='bold 30px sans-serif';cx.textAlign='center';cx.fillText(name,128,42);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
+  sp.scale.set(4,1,1);sp.position.y=3.6;g.add(sp);
+  g.position.set(x,0,z);g.userData={t:Math.random()*9};scene.add(g);return g;
+}
+
+const team={
+  trader:  character(-6,4,0xffc48a,0x3f6df0,'Dip Trader'),
+  momentum:character(6,4,0xf3d1b0,0xe2574c,'Momentum-kun'),
+  risk:    character(-2,9,0xc98850,0x2fa864,'Risk Manager'),
+  brain:   character(2,9,0xffd9b0,0x9a5ce0,'Brain Analyst'),
+  janitor: character(-10,9,0xb07b4f,0xd9a13b,'Penjaga'),
+  boss:    character(10,9,0xf2c19b,0x1f2a44,'Boss')
+};
+Object.values(team).forEach(c=>{ desk(c.position.x,c.position.z-1.6,0); });
+
+// ---- Billboard PnL di dinding ----
+const bb=D.createElement('canvas');bb.width=512;bb.height=160;
+const bbTex=new THREE.CanvasTexture(bb);
+const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex,transparent:true}));
+billboard.scale.set(13,4,1);billboard.position.set(0,7.2,-20.3);scene.add(billboard);
+function drawBillboard(pnl,cy,w,l){
+  const c=bb.getContext('2d');c.clearRect(0,0,512,160);
+  c.fillStyle='#0d1122ee';c.fillRect(0,0,512,160);
+  c.strokeStyle='#3a4470';c.lineWidth=6;c.strokeRect(3,3,506,154);
+  c.fillStyle='#e8ecff';c.font='bold 34px sans-serif';c.textAlign='center';
+  c.fillText('PnL STRATEGI',256,48);
+  c.fillStyle=pnl>=0?'#43e97b':'#ff5d5d';c.font='bold 56px monospace';
+  c.fillText((pnl>=0?'+':'')+pnl.toFixed(2)+' USD',256,116);
+  c.fillStyle='#9fb0e8';c.font='24px sans-serif';
+  c.fillText(cy+' siklus · ✓'+w+' ✗'+l,256,148);
+  bbTex.needsUpdate=true;
+}
+
+// ---- partikel & emoji mengambang ----
+const floaters=[];
+function floatEmoji(txt,pos,color){
+  const cv=D.createElement('canvas');cv.width=256;cv.height=96;
+  const c=cv.getContext('2d');c.font='bold 44px sans-serif';c.textAlign='center';
+  c.fillStyle=color;c.fillText(txt,128,60);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
+  sp.scale.set(3,1.15,1);sp.position.copy(pos);scene.add(sp);
+  floaters.push({sp,life:2.6});
+}
+const confetti=[];
+function burst(pos){
+  for(let i=0;i<40;i++){
+    const m=new THREE.Mesh(new THREE.BoxGeometry(.12,.12,.12),mat([0xffd54a,0x43e97b,0x4facfe,0xff5d8f][i%4]));
+    m.position.copy(pos);
+    scene.add(m);
+    confetti.push({m,v:new THREE.Vector3((Math.random()-.5)*7,5+Math.random()*4,(Math.random()-.5)*7),life:1.8});
+  }
+}
+
+// ---- kamera isometrik + drag ----
+let ang=0.72,dist=38,height=26,drag=false,px=0;
+cam.position.set(0,height,dist);
+function placeCam(){cam.position.set(Math.sin(ang)*dist,height,Math.cos(ang)*dist);cam.lookAt(0,1.5,0)}
+placeCam();
+W.addEventListener('mousedown',e=>{drag=true;px=e.clientX});
+W.addEventListener('mouseup',()=>drag=false);
+W.addEventListener('mousemove',e=>{if(drag){ang+=(e.clientX-px)*0.005;px=e.clientX;placeCam()}});
+W.addEventListener('wheel',e=>{dist=Math.min(60,Math.max(18,dist+e.deltaY*0.02));placeCam()},{passive:true});
+
+// ---- ambil state & reaksi ----
+let lastEvKey='';
+const KINDMAP={filled:['trader','🛒 FILL!','#43e97b'],momentum:['momentum','🚀 GANBATTE!','#ffd54a'],
+  sell:['trader','💰 SELL!','#4facfe'],sl:['risk','😭 SL...','#ff5d5d'],
+  profit:['boss','🎉 PROFIT!','#43e97b'],loss:['risk','📉 rugi kecil','#ff9d5d'],
+  skip:['brain','💤 skip','#9fb0e8']};
+function react(kind,sym,txt){
+  const m=KINDMAP[kind];if(!m)return;
+  const who=team[m[0]];
+  floatEmoji(m[1]+' '+(sym||''),who.position.clone().add(new THREE.Vector3(0,4.6,0)),m[2]);
+  who.userData.jump=1.6;
+  if(kind==='profit'||kind==='sell')burst(who.position.clone().add(new THREE.Vector3(0,3,0)));
+  if(kind==='sl'){who.userData.faint=2.2}
+  if(kind==='momentum'){who.userData.run=2.5}
+}
+async function poll(){
+  try{
+    const r=await fetch('/api/state');const s=await r.json();
+    D.getElementById('pnl').textContent=(s.total_net>=0?'+':'')+s.total_net.toFixed(2)+' USD';
+    D.getElementById('pnl').style.color=s.total_net>=0?'#43e97b':'#ff5d5d';
+    D.getElementById('wl').textContent='siklus '+s.cycles+' · ✓'+s.wins+' ✗'+s.losses;
+    drawBillboard(s.total_net,s.cycles,s.wins,s.losses);
+    const feed=D.getElementById('feed');feed.innerHTML='';
+    (s.events||[]).slice(0,9).forEach(e=>{
+      const d=D.createElement('div');d.className='fitem';
+      d.innerHTML='<b>'+e.ts+'</b> '+e.txt;feed.appendChild(d);
+    });
+    if(s.events&&s.events.length){
+      const key=s.events[0].ts+s.events[0].txt;
+      if(key!==lastEvKey){lastEvKey=key;react(s.events[0].kind,s.events[0].sym,s.events[0].txt)}
+    }
+  }catch(e){}
+}
+setInterval(poll,2000);poll();
+
+// ---- animasi ----
+const clock=new THREE.Clock();
+(function loop(){
+  requestAnimationFrame(loop);
+  const t=clock.getElapsedTime();
+  Object.values(team).forEach(c=>{
+    const u=c.userData;
+    c.position.y=Math.abs(Math.sin(t*2+u.t))*0.12;                 // napas idle
+    const aL=c.getObjectByName('armL'),aR=c.getObjectByName('armR');
+    if(u.jump>0){u.jump-=0.016;c.position.y+=Math.sin(Math.min(1,u.jump/1.6)*Math.PI)*1.2}
+    if(u.faint>0){u.faint-=0.016;c.rotation.z=Math.sin(u.faint*6)*0.9}else c.rotation.z=0;
+    if(u.run>0){u.run-=0.016;c.position.x+=Math.sin(t*10)*0.04}
+    if(aL&&aR){const s=Math.sin(t*9+u.t)*0.5;aL.rotation.x=-1.1+s;aR.rotation.x=-1.1-s} // ngetik
+  });
+  for(let i=confetti.length-1;i>=0;i--){const p=confetti[i];p.life-=0.016;
+    p.v.y-=0.15;p.m.position.addScaledVector(p.v,0.016);p.m.rotation.x+=0.2;p.m.rotation.z+=0.3;
+    if(p.life<=0){scene.remove(p.m);confetti.splice(i,1)}}
+  for(let i=floaters.length-1;i>=0;i--){const f=floaters[i];f.life-=0.016;
+    f.sp.position.y+=0.02;f.sp.material.opacity=Math.min(1,f.life);
+    if(f.life<=0){scene.remove(f.sp);floaters.splice(i,1)}}
+  renderer.render(scene,cam);
+})();
+</script>
+</body>
+</html>
