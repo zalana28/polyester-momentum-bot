@@ -34,6 +34,12 @@
     .agent-bubble::after { content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%); border:6px solid transparent; border-top-color:rgba(255,255,255,0.92); }
     .agent-bubble-alert { background:#fee2e2; color:#7f1d1d; }
     .agent-bubble-alert::after { border-top-color:#fee2e2; }
+    .agent-bubble-think { background:#fef9c3; color:#713f12; }
+    .agent-bubble-think::after { border-top-color:#fef9c3; }
+    .agent-bubble .d { width:6px; height:6px; border-radius:50%; background:#713f12; display:inline-block; margin:0 2px; animation:dotblink 1s infinite; }
+    .agent-bubble .d:nth-child(2) { animation-delay:0.2s; }
+    .agent-bubble .d:nth-child(3) { animation-delay:0.4s; }
+    @keyframes dotblink { 0%,100% { opacity:0.15; } 50% { opacity:1; } }
   </style>
 </head>
 <body>
@@ -131,8 +137,11 @@
       ANIM_BLINK_MIN: 3, ANIM_BLINK_MAX: 5, ANIM_BLINK_CLOSE: 0.12,
       ANIM_TYPE_SPEED: 14, ANIM_TYPE_AMP: 0.15, ANIM_WORK_BLEND: 6,
       HOLO_SPIN: 0.8, HOLO_BOB: 0.08,
-      LABEL_FONT_PX: 15, LABEL_OFFSET_Z: 1.7, LABEL_Y: 0.12,
+      LABEL_FONT_PX: 15, LABEL_OFFSET_Z: 1.7, LABEL_Y: 0.12, LABEL_OPACITY_IDLE: 0.85,
       BUBBLE_FONT_PX: 16, BUBBLE_MAX: 3, BUBBLE_Y: 4.1, BUBBLE_FADE_MS: 200,
+      STATE_THINKING_MS: 6000, STATE_ACTING_MS: 4000, STATE_ALERT_MS: 8000,
+      THINK_TILT: 0.22, LEGACY_AUTO_TYPING: false,
+      FOCUS_USER_IDLE_MS: 10000, FOCUS_COOLDOWN_MS: 25000,
       DEBUG: true,
     };
 
@@ -324,7 +333,8 @@
       box(0.3, 1.5, 2.4, 0xfaedcd, -2.3, 0.75, 0, g); // leg L
       box(0.3, 1.5, 2.4, 0xfaedcd, 2.3, 0.75, 0, g); // leg R
       box(2.0, 1.3, 0.15, 0x334155, 0, 2.5, -0.6, g); // dark bezel monitor
-      box(1.8, 1.1, 0.05, 0xbae6fd, 0, 2.5, -0.52, g); // light cyan screen
+      const scr = box(1.8, 1.1, 0.05, 0xbae6fd, 0, 2.5, -0.52, g); // light cyan screen
+      scr.name = 'screen';
       g.position.set(x, 0, z);
       g.rotation.y = rot;
       scene.add(g);
@@ -479,6 +489,8 @@
       const fx = -Math.sin(d.ry), fz = -Math.cos(d.ry); // arah hadap (ke monitor)
       c.userData.desk = desk(d.x + fx*1.9, d.z + fz*1.9, d.ry);
       c.userData.chair = chair(c, d.ry);
+      c.userData.screen = c.userData.desk.getObjectByName('screen');
+      c.userData.screenOrig = c.userData.screen.material.color.getHex();
       addMonitorGlow(d.x + fx*1.0, d.z + fz*1.0);
       floorLamp(d.x - Math.cos(d.ry)*2.6, d.z + Math.sin(d.ry)*2.6, d.id);
       if (d.id === 'brain') {
@@ -509,13 +521,18 @@
     // ---- Label nama CSS2D (Fase 5a): di lantai sisi kamera, tidak menimpa wajah/monitor ----
     function setLabelActive(agentId, on) {
       const a = team[agentId];
-      if (a && a.userData.label) a.userData.label.el.classList.toggle('dim', !on);
+      if (!a || !a.userData.label) return;
+      const el = a.userData.label.el;
+      const accent = '#' + ROLES[agentId].color.toString(16).padStart(6, '0');
+      if (on) { el.style.opacity = '1'; el.style.boxShadow = '0 0 0 2px ' + accent; }
+      else { el.style.opacity = String(CONFIG.LABEL_OPACITY_IDLE); el.style.boxShadow = 'none'; }
     }
     Object.entries(team).forEach(([id, c]) => {
       const d = DESK_LAYOUT.find(l => l.id === id);
       const div = D.createElement('div');
       div.className = 'agent-label';
       div.style.fontSize = CONFIG.LABEL_FONT_PX + 'px';
+      div.style.opacity = String(CONFIG.LABEL_OPACITY_IDLE);
       const dot = D.createElement('span'); dot.className = 'dot';
       dot.style.background = '#' + ROLES[id].color.toString(16).padStart(6, '0');
       const nm = D.createElement('span'); nm.textContent = ROLES[id].name;
@@ -526,6 +543,91 @@
       c.userData.label = { el: div, obj: lo };
     });
 
+    // Ring status per agent (geometri bersama, material per agent)
+    DESK_LAYOUT.forEach(d => {
+      const a = team[d.id];
+      const m = new THREE.MeshBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
+      const ring = new THREE.Mesh(ringGeoShared, m);
+      ring.rotation.x = -Math.PI / 2; ring.renderOrder = 20;
+      const cp = a.userData.chair.position;
+      ring.position.set(cp.x, ringY(cp.x, cp.z), cp.z);
+      scene.add(ring);
+      agentStates[d.id] = { state: 'idle', until: 0, text: '', ring, ringMat: m, screen: a.userData.screen, screenOrig: a.userData.screenOrig };
+    });
+
+    // ---- State machine (Fase 5b): idle | thinking | acting | alert ----
+    const STATE_PRIO = { idle: 0, thinking: 1, acting: 2, alert: 3 };
+    const STATE_DUR = { thinking: CONFIG.STATE_THINKING_MS, acting: CONFIG.STATE_ACTING_MS, alert: CONFIG.STATE_ALERT_MS };
+    const agentStates = {};
+    const ringGeoShared = new THREE.RingGeometry(1.15, 1.45, 40);
+    let lastFocusAt = -1e9;
+    // tinggi ring: di atas lapisan teratas di bawahnya (karpet inner top 0.37, logo 0.45; lantai 0.25)
+    function ringY(x, z) { return (Math.abs(x) <= 15 && z >= -5.5 && z <= 12.5) ? 0.47 : 0.30; }
+    function restoreScreen(st) { if (st.screen) st.screen.material.color.setHex(st.screenOrig); }
+    function tryFocus(agentId) {
+      const now = performance.now();
+      if (focusState.active) return;
+      if (now - lastInteraction < CONFIG.FOCUS_USER_IDLE_MS) return;
+      if (now - lastFocusAt < CONFIG.FOCUS_COOLDOWN_MS) return;
+      lastFocusAt = now;
+      focusOnAgent(agentId);
+    }
+    function setAgentState(agentId, state, text = '', opts = {}) {
+      const a = team[agentId], st = agentStates[agentId];
+      if (!a || !st) return;
+      const now = performance.now();
+      if (state !== 'idle' && st.state !== 'idle' && STATE_PRIO[state] < STATE_PRIO[st.state] && now < st.until && !opts.force) return;
+      const dur = opts.durationMs ?? (STATE_DUR[state] || 4000);
+      const u = a.userData;
+      st.state = state; st.text = text; st.until = state === 'idle' ? 0 : now + dur;
+      if (state === 'idle') {
+        u.isWorking = CONFIG.LEGACY_AUTO_TYPING === true;
+        hideBubble(agentId); setLabelActive(agentId, false);
+        st.ringMat.color.setHex(0x64748b); st.ringMat.opacity = 0.35;
+        restoreScreen(st); u.thinkTilt = 0;
+      } else if (state === 'thinking') {
+        u.isWorking = false;
+        showBubble(agentId, '...', 'think');
+        st.ringMat.color.setHex(0xfacc15); st.ringMat.opacity = 0.8;
+        restoreScreen(st); setLabelActive(agentId, true); u.thinkTilt = u.thinkTilt || 0;
+      } else if (state === 'acting') {
+        u.isWorking = true;
+        showBubble(agentId, text, 'info');
+        st.ringMat.color.setHex(0x10b981); st.ringMat.opacity = 0.85;
+        setLabelActive(agentId, true); restoreScreen(st);
+        if (opts.focus) tryFocus(agentId);
+      } else if (state === 'alert') {
+        u.isWorking = false;
+        showBubble(agentId, text || 'ALERT', 'alert');
+        st.ringMat.color.setHex(0xff5d5d); setLabelActive(agentId, true);
+        if (opts.focus) tryFocus(agentId);
+      }
+    }
+    function getStates() {
+      const now = performance.now();
+      const rows = DESK_LAYOUT.map(d => {
+        const st = agentStates[d.id];
+        return { agent: d.id, state: st.state, sisa_ms: Math.max(0, Math.round(st.until - now)),
+                 ring: st.ringMat.color.getHexString(),
+                 monitor: st.screen ? (st.screen.material.color.getHex() === st.screenOrig ? 'normal' : 'flicker') : '-' };
+      });
+      console.table(rows); return rows;
+    }
+    let demoTimers = [];
+    function debugDemo() {
+      stopDemo();
+      const seq = [
+        [0,    () => setAgentState('brain', 'acting', 'Scan BTC-USDT')],
+        [1500, () => setAgentState('risk', 'thinking')],
+        [3000, () => setAgentState('trader', 'acting', 'Skip AVAX-USDT: downtrend')],
+        [4500, () => setAgentState('boss', 'acting', 'WIN +1.20')],
+        [6000, () => setAgentState('janitor', 'alert', 'SL hit HYPE-USDT', { focus: true })],
+        [14000, () => Object.keys(team).forEach(id => setAgentState(id, 'idle'))],
+      ];
+      seq.forEach(([ms, f]) => demoTimers.push(setTimeout(f, ms)));
+    }
+    function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; Object.keys(team).forEach(id => setAgentState(id, 'idle')); }
+
     // ---- Bubble CSS2D (API; disambungkan ke state machine di 5b) ----
     const bubbleAgents = {};
     function showBubble(agentId, text, tone = 'info', durationMs = 0) {
@@ -533,20 +635,33 @@
       if (!a) return;
       const keys = Object.keys(bubbleAgents);
       if (!bubbleAgents[agentId] && keys.length >= CONFIG.BUBBLE_MAX) {
-        let oldest = keys[0];
-        keys.forEach(k => { if (bubbleAgents[k].ts < bubbleAgents[oldest].ts) oldest = k; });
-        hideBubble(oldest);
+        // alert tidak boleh tergusur: korbankan info/think tertua; bila semua alert, tertua
+        let pool = keys.filter(k => bubbleAgents[k].tone !== 'alert');
+        if (tone !== 'alert' || pool.length === 0) pool = pool.length ? pool : keys;
+        if (pool.length) {
+          let oldest = pool[0];
+          pool.forEach(k => { if (bubbleAgents[k].ts < bubbleAgents[oldest].ts) oldest = k; });
+          hideBubble(oldest);
+        }
       }
       hideBubble(agentId);
+      const wrap = D.createElement('div');
+      wrap.style.cssText = 'position:relative;width:0;height:0;pointer-events:none;';
       const el = D.createElement('div');
-      el.className = 'agent-bubble' + (tone === 'alert' ? ' agent-bubble-alert' : '');
-      const txt = String(text || '');
-      el.textContent = txt.length > 60 ? txt.slice(0, 57) + '...' : txt;
+      el.className = 'agent-bubble' + (tone === 'alert' ? ' agent-bubble-alert' : tone === 'think' ? ' agent-bubble-think' : '');
       el.style.fontSize = CONFIG.BUBBLE_FONT_PX + 'px';
-      const o = new CSS2DObject(el);
+      el.style.position = 'absolute'; el.style.bottom = '6px'; el.style.left = '0'; el.style.transform = 'translateX(-50%)';
+      if (text === '...') {
+        for (let i = 0; i < 3; i++) { const d2 = D.createElement('span'); d2.className = 'd'; el.appendChild(d2); }
+      } else {
+        const txt = String(text || '');
+        el.textContent = txt.length > 60 ? txt.slice(0, 57) + '...' : txt;
+      }
+      wrap.appendChild(el);
+      const o = new CSS2DObject(wrap);
       o.position.set(a.position.x, CONFIG.BUBBLE_Y, a.position.z);
       a.add(o);
-      bubbleAgents[agentId] = { el, o, ts: performance.now() };
+      bubbleAgents[agentId] = { el, wrap, o, ts: performance.now(), tone };
       requestAnimationFrame(() => el.classList.add('show'));
       if (durationMs > 0) setTimeout(() => hideBubble(agentId), durationMs);
     }
@@ -753,6 +868,18 @@
             u.baseX = c.position.x; u.baseZ = c.position.z;
             u.blinkAt = t + CONFIG.ANIM_BLINK_MIN + (u.t % 1) * (CONFIG.ANIM_BLINK_MAX - CONFIG.ANIM_BLINK_MIN);
             u.blinkN = 0; u.blinkUntil = 0;
+            u.isWorking = CONFIG.LEGACY_AUTO_TYPING === true;
+            u.workW = u.isWorking ? 1 : 0;
+          }
+          const st = agentStates[u.id];
+          if (st) {
+            if (st.state !== 'idle' && performance.now() > st.until) setAgentState(u.id, 'idle');
+            if (st.state === 'alert') {
+              st.ringMat.opacity = 0.5 + 0.4 * Math.abs(Math.sin(t * 6));
+              if (st.screen) st.screen.material.color.setHex(Math.sin(t * 10) > 0 ? 0xff5d5d : st.screenOrig);
+            }
+            const tiltTarget = st.state === 'thinking' ? CONFIG.THINK_TILT : 0;
+            u.thinkTilt = (u.thinkTilt || 0) + (tiltTarget - (u.thinkTilt || 0)) * Math.min(1, dt * 5);
           }
           const reacting = u.jump > 0 || u.faint > 0 || u.run > 0;
           if (!reacting) {
@@ -761,7 +888,7 @@
             c.position.x = u.baseX; c.position.z = u.baseZ;
             if (u.torso) u.torso.scale.y = 1 + CONFIG.ANIM_TORSO_SWAY * Math.sin(t * CONFIG.ANIM_BREATH_SPEED + u.t);
             if (u.head) {
-              u.head.rotation.z = CONFIG.ANIM_HEAD_SWAY * Math.sin(t * 0.8 + u.t);
+              u.head.rotation.z = CONFIG.ANIM_HEAD_SWAY * Math.sin(t * 0.8 + u.t) + (u.thinkTilt || 0);
               u.head.rotation.y = CONFIG.ANIM_HEAD_SWAY * Math.sin(t * 0.6 + u.t * 1.7);
             }
             u.workW += ((u.isWorking ? 1 : 0) - u.workW) * Math.min(1, dt * CONFIG.ANIM_WORK_BLEND);
@@ -878,7 +1005,7 @@
       console.table(rows);
       return rows;
     }
-    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react };
+    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react, setAgentState, getStates, debugDemo, stopDemo };
 
   </script>
 </body></html>
