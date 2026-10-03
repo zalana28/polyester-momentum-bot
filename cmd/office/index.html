@@ -78,16 +78,23 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
     container.appendChild(renderer.domElement);
 
     // Warm Daylight Lighting
-    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-    const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.2);
-    keyLight.position.set(30, 50, 20);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.42));
+    scene.add(new THREE.HemisphereLight(0xdfefff, 0xcbb79a, 0.55));
+    const keyLight = new THREE.DirectionalLight(0xfff2dd, 1.35);
+    keyLight.position.set(28, 42, 18);
     keyLight.castShadow = true; keyLight.shadow.mapSize.set(2048,2048);
+    keyLight.shadow.camera.left = -45; keyLight.shadow.camera.right = 45;
+    keyLight.shadow.camera.top = 45; keyLight.shadow.camera.bottom = -45;
+    keyLight.shadow.camera.near = 1; keyLight.shadow.camera.far = 150;
+    keyLight.shadow.bias = -0.0004;
     scene.add(keyLight);
 
-    const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+    const mat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.92, metalness: 0.02 });
 
     const box = (w, h, d, c, x, y, z, parent) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c));
@@ -138,13 +145,14 @@
     // Hanging ceiling lamps (over both desk rows)
     function lamp(x, z) {
       const g = new THREE.Group();
-      box(0.12, 2.6, 0.12, 0x94a3b8, 0, 11.2, 0, g);
-      box(2.2, 0.35, 1.2, 0x334155, 0, 9.8, 0, g);
-      const bulb = box(1.6, 0.15, 0.9, 0xfff3c4, 0, 9.6, 0, g);
-      bulb.material = new THREE.MeshBasicMaterial({ color: 0xfff3c4 });
+      box(0.07, 6.5, 0.07, 0x8a94a8, 0, 12.6, 0, g);
+      const wire = box(0.03, 2.6, 0.03, 0x8a94a8, 0, 8.1, 0, g); wire.castShadow = false;
+      box(1.5, 0.22, 0.85, 0x2f3b52, 0, 6.85, 0, g);
+      const bulb = box(1.15, 0.12, 0.6, 0xffedc2, 0, 6.7, 0, g);
+      bulb.material = new THREE.MeshBasicMaterial({ color: 0xffedc2 });
       g.position.set(x, 0, z); scene.add(g);
     }
-    [-6.5, 0, 6.5].forEach(x => { lamp(x, 0); lamp(x, 7.5); });
+    [-6.5, 0, 6.5].forEach(x => { lamp(x, 0.4); lamp(x, 7.9); });
 
     // Furniture
     function desk(x, z, rot) {
@@ -184,20 +192,29 @@
       g.add(sp);
 
       g.position.set(x, 0, z);
-      g.userData = { t: Math.random() * 10, name };
+      g.userData = { t: Math.random() * 10, name, shirt: shirtColor };
       scene.add(g);
       return g;
+    }
+    function chair(c) {
+      const g = new THREE.Group();
+      box(1.05, 0.16, 1.0, 0xe2e8f0, 0, 0.92, 0, g);
+      box(1.05, 1.25, 0.16, c.userData.shirt, 0, 1.55, 0.62, g);
+      box(0.16, 0.9, 0.16, 0x94a3b8, 0, 0.45, 0, g);
+      box(1.1, 0.1, 1.1, 0x64748b, 0, 0.05, 0, g);
+      g.position.set(c.position.x, 0, c.position.z + 1.05);
+      scene.add(g);
     }
 
     const team = {
       trader:   character(-6.5, 0,   0xffd9b0, 0x60a5fa, 'Dip Trader'),
       momentum: character( 0,   0,   0xf3d1b0, 0xf87171, 'Momentum-kun'),
+      janitor:  character( 6.5, 0,   0xb07b4f, 0xfbbf24, 'Security'),
       risk:     character(-6.5, 7.5, 0xc98850, 0x34d399, 'Risk Manager'),
       brain:    character( 0,   7.5, 0xffd9b0, 0xa78bfa, 'Brain Analyst'),
-      janitor:  character(-13,  7.5, 0xb07b4f, 0xfbbf24, 'Security'),
-      boss:     character( 13,  7.5, 0xf2c19b, 0x475569, 'Director')
+      boss:     character( 6.5, 7.5, 0xf2c19b, 0x475569, 'Director')
     };
-    Object.values(team).forEach(c => desk(c.position.x, c.position.z - 1.9, 0));
+    Object.values(team).forEach(c => { desk(c.position.x, c.position.z - 1.9, 0); chair(c); });
 
     // Clean White Marquee PnL Billboard
     const bbCanvas = D.createElement('canvas'); bbCanvas.width = 512; bbCanvas.height = 200;

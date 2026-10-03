@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -176,6 +177,7 @@ func main() {
 	br = brain.New(envF("DIP_BRAIN_MIN", 40), time.Duration(envI("BRAIN_COOLDOWN_MIN", 10))*time.Minute)
 	loadStats()
 	netPnL = st.TotalNet
+	peakNet = netPnL
 	logf("brain active: momentum score %.0f | stats loaded: %d cycles (%dW/%dL), net $%.4f",
 		envF("DIP_MOM_SCORE", 65), st.Cycles, st.Wins, st.Losses, st.TotalNet)
 
@@ -185,8 +187,8 @@ func main() {
 		if ctx.Err() != nil {
 			break
 		}
-		if netPnL <= -maxLoss {
-			logf("cumulative net PnL %.2f <= -%.0f — stopping (loss cap)", netPnL, maxLoss)
+		if netPnL <= peakNet-maxLoss {
+			logf("drawdown %.2f from peak %.2f exceeds cap %.0f — stopping", peakNet-netPnL, peakNet, maxLoss)
 			break
 		}
 		cycleNo++
@@ -699,6 +701,9 @@ func bookCycle(symbol, strat string, entryS6, qtyS6, exitS6 int64, reason string
 	fx := exit * qty * feeOut
 	net := gross - fe - fx
 	netPnL += net
+	if netPnL > peakNet {
+		peakNet = netPnL
+	}
 
 	ps := st.PerPair[symbol]
 	ps.Fills++
@@ -874,6 +879,7 @@ var (
 	regimeCache = map[string]regimeEntry{}
 	viewCache   = map[string]viewEntry{}
 	st          dipStats
+	peakNet     float64
 )
 
 type viewEntry struct {
@@ -906,12 +912,66 @@ type dipStats struct {
 func loadStats() {
 	st.PerPair = map[string]pairStat{}
 	raw, err := os.ReadFile("state-dip/stats.json")
+	if err == nil {
+		_ = json.Unmarshal(raw, &st)
+	}
+	if st.PerPair == nil {
+		st.PerPair = map[string]pairStat{}
+	}
+	if st.Cycles == 0 {
+		seedStatsFromCSV()
+	}
+}
+
+// seedStatsFromCSV membangun statistik lifetime dari trades.csv saat stats.json
+// belum pernah terisi (bot v2 ke atas), supaya PnL lama tetap terlihat.
+func seedStatsFromCSV() {
+	f, err := os.Open("state-dip/trades.csv")
 	if err != nil {
 		return
 	}
-	_ = json.Unmarshal(raw, &st)
-	if st.PerPair == nil {
-		st.PerPair = map[string]pairStat{}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	first := true
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if first {
+			first = false
+			if strings.HasPrefix(line, "ts_close") {
+				continue
+			}
+		}
+		p := strings.Split(line, ",")
+		if len(p) < 10 {
+			continue
+		}
+		net, perr := strconv.ParseFloat(p[9], 64)
+		if perr != nil {
+			continue
+		}
+		sym := p[1]
+		ps := st.PerPair[sym]
+		ps.Fills++
+		if net >= 0 {
+			ps.Wins++
+		} else {
+			ps.Losses++
+		}
+		ps.Net += net
+		st.PerPair[sym] = ps
+		st.TotalNet += net
+		st.Cycles++
+		if net >= 0 {
+			st.Wins++
+		} else {
+			st.Losses++
+		}
+	}
+	if st.Cycles > 0 {
+		saveStats()
 	}
 }
 
