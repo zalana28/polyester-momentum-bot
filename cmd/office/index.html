@@ -105,7 +105,7 @@
       // kamera & kontrol (Fase 2)
       CAMERA_FOV: 38, CAMERA_FAR: 200,
       CAMERA_START: [21.8, 23.0, 24.8],   // posisi lama: az 0.72, dist 33, h 23
-      CAMERA_TARGET: [0, 1.2, 3.5],       // tengah meja — sesuaikan lagi pas layout U
+      CAMERA_TARGET: [0, 1.2, 2.0],       // tengah area U
       ORBIT_DAMPING: 0.06,
       ORBIT_MIN_POLAR: 0.6, ORBIT_MAX_POLAR: 1.35,
       ORBIT_MIN_DIST: 8, ORBIT_MAX_DIST: 70,
@@ -115,6 +115,7 @@
       SWEEP_BLEND: 2.0,                   // detik lerp masuk sapuan
       FOCUS_DURATION: 1.5, FOCUS_HOLD: 6,
       FOCUS_CAM_DISTANCE: 9, FOCUS_CAM_HEIGHT: 6,
+      DEBUG: true,
     };
 
     const scene = new THREE.Scene();
@@ -171,8 +172,39 @@
 
     // Walls
     box(46, 13, 0.8, CONFIG.COLOR_WALL_BACK, 0, 6.5, -13); // Cream back wall
-    box(9, 5, 0.1, 0xaed9e0, -9, 7, -12.5); // Pastel window L
-    box(9, 5, 0.1, 0xaed9e0, 9, 7, -12.5); // Pastel window R
+
+    // Jendela besar dengan skyline kota (seed tetap agar konsisten tiap refresh)
+    function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+    function skylineWindow(cx, cy, w, h) {
+      const g = new THREE.Group();
+      box(w, h, 0.12, 0x18233b, 0, 0, 0, g); // kaca malam
+      const rnd = mulberry32(1337);
+      const n = Math.floor(w / 0.9);
+      for (let i = 0; i < n; i++) {
+        const bw = 0.5 + rnd() * 0.5, bh = 1.2 + rnd() * 3.2;
+        const bx = -w/2 + 0.6 + i * (w - 1.2) / (n - 1);
+        box(bw, bh, 0.25, 0x3a4a6b, bx, -h/2 + bh/2 + 0.15, 0.12, g);
+        if (rnd() > 0.45) {
+          const w2 = box(0.14, 0.14, 0.06, 0xffd97a, bx + (rnd()-0.5)*0.35, -h/2 + 0.6 + rnd()*(bh-0.9), 0.27, g);
+          w2.material = new THREE.MeshBasicMaterial({ color: 0xffd97a });
+        }
+      }
+      box(w+0.5, 0.3, 0.2, 0xe8e2d4, 0, h/2+0.12, 0.05, g);
+      box(w+0.5, 0.3, 0.2, 0xe8e2d4, 0, -h/2-0.12, 0.05, g);
+      box(0.3, h+0.55, 0.2, 0xe8e2d4, -w/2-0.12, 0, 0.05, g);
+      box(0.3, h+0.55, 0.2, 0xe8e2d4, w/2+0.12, 0, 0.05, g);
+      g.position.set(cx, cy, -12.45); scene.add(g);
+    }
+    skylineWindow(-6, 7.4, 12, 5.6);
+
+    // wallScreen placeholder (isi nyata di Fase 7) — sisi kepala meja, kanan-atas
+    const wallScreenGroup = new THREE.Group();
+    box(9.6, 4.8, 0.18, 0x232a3d, 0, 0, 0, wallScreenGroup); // bingkai
+    const wsMat = new THREE.MeshBasicMaterial({ color: 0x101a2e });
+    const wsPlane = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 4.2), wsMat);
+    wsPlane.position.z = 0.11; wsPlane.name = 'wallScreen';
+    wallScreenGroup.add(wsPlane);
+    wallScreenGroup.position.set(8.6, 8.3, -12.35); scene.add(wallScreenGroup);
     box(46, 0.9, 1.2, 0xe8e2d4, 0, 12.4, -13); // Wall crown trim
     box(0.8, 13, 46, CONFIG.COLOR_WALL_SIDE, -20, 6.5, -3); // Side wall L
     box(0.8, 13, 46, CONFIG.COLOR_WALL_SIDE, 20, 6.5, -3); // Side wall R
@@ -203,18 +235,19 @@
       box(0.45, 1.4, 1.0, bookCols[(r*3+b)%6], -2.8 + b*0.72 + (r%2)*0.18, 1.45 + r*2, 0, shelf);
     shelf.position.set(-14, 0, -10.5); scene.add(shelf);
 
-    // Hanging ceiling lamps (over both desk rows)
-    function lamp(x, z) {
+    // Lampu berdiri di sisi tiap meja (dipilih (b): kamera selalu orbit dari
+    // atas sehingga plafon tidak pernah terlihat; lampu berdiri tidak melayang)
+    function floorLamp(x, z) {
       const g = new THREE.Group();
-      box(0.07, 6.5, 0.07, 0x8a94a8, 0, 12.6, 0, g);
-      const wire = box(0.03, 2.6, 0.03, 0x8a94a8, 0, 8.1, 0, g); wire.castShadow = false;
-      box(1.5, 0.22, 0.85, 0x2f3b52, 0, 6.85, 0, g);
-      const bulb = box(1.15, 0.12, 0.6, 0xffedc2, 0, 6.7, 0, g);
+      box(1.1, 0.12, 1.1, 0x334155, 0, 0.06, 0, g);
+      box(0.09, 5.2, 0.09, 0x8a94a8, 0, 2.7, 0, g);
+      box(1.3, 0.5, 1.3, 0x2f3b52, 0, 5.55, 0, g);
+      const bulb = box(1.0, 0.14, 1.0, 0xffedc2, 0, 5.32, 0, g);
       bulb.material = new THREE.MeshBasicMaterial({ color: 0xffedc2 });
       g.position.set(x, 0, z); scene.add(g);
-      addLampGlow(x, z);
+      const l = new THREE.PointLight(CONFIG.LIGHT_LAMP_COLOR, CONFIG.LIGHT_LAMP_INTENSITY, CONFIG.LIGHT_LAMP_DISTANCE, 2);
+      l.position.set(x, 5.0, z); scene.add(l);
     }
-    [-6.5, 0, 6.5].forEach(x => { lamp(x, 0.4); lamp(x, 7.9); });
 
     // Furniture
     function desk(x, z, rot) {
@@ -231,7 +264,7 @@
     }
 
     // Character Factory - Vibrant Soft Colors
-    function character(x, z, headColor, shirtColor, name) {
+    function character(x, z, headColor, shirtColor, name, ry) {
       const g = new THREE.Group();
       box(1.0, 1.0, 1.0, headColor, 0, 2.45, 0, g); // head
       box(1.2, 1.5, 0.8, shirtColor, 0, 1.2, 0, g); // body
@@ -254,36 +287,58 @@
       g.add(sp);
 
       g.position.set(x, 0, z);
+      g.rotation.y = ry;
       g.userData = { t: Math.random() * 10, name, shirt: shirtColor };
       scene.add(g);
       return g;
     }
-    function chair(c) {
+    function chair(c, ry) {
       const g = new THREE.Group();
       box(1.05, 0.16, 1.0, 0xe2e8f0, 0, 0.92, 0, g);
       box(1.05, 1.25, 0.16, c.userData.shirt, 0, 1.55, 0.62, g);
       box(0.16, 0.9, 0.16, 0x94a3b8, 0, 0.45, 0, g);
       box(1.1, 0.1, 1.1, 0x64748b, 0, 0.05, 0, g);
-      g.position.set(c.position.x, 0, c.position.z + 1.05);
+      g.position.set(c.position.x + Math.sin(ry) * 1.05, 0, c.position.z + Math.cos(ry) * 1.05);
+      g.rotation.y = ry;
       scene.add(g);
     }
 
-    const team = {
-      trader:   character(-6.5, 0,   0xffd9b0, 0x60a5fa, 'Dip Trader'),
-      momentum: character( 0,   0,   0xf3d1b0, 0xf87171, 'Momentum-kun'),
-      janitor:  character( 6.5, 0,   0xb07b4f, 0xfbbf24, 'Security'),
-      risk:     character(-6.5, 7.5, 0xc98850, 0x34d399, 'Risk Manager'),
-      brain:    character( 0,   7.5, 0xffd9b0, 0xa78bfa, 'Brain Analyst'),
-      boss:     character( 6.5, 7.5, 0xf2c19b, 0x475569, 'Director')
+    // Layout meja huruf U, terbuka ke kamera (+z). ry = arah hadap:
+    // arah hadap karakter & monitor = (-sin ry, 0, -cos ry).
+    const DESK_LAYOUT = [
+      { id:'trader',   x:-8.5,  z:-0.75, ry:-Math.PI/2 },   // lengan kiri  -> hadap +x
+      { id:'momentum', x: 8.5,  z:-0.75, ry: Math.PI/2 },   // lengan kanan -> hadap -x
+      { id:'risk',     x:-5.5,  z:-6.25, ry: Math.PI },     // sisi dalam kiri  -> hadap +z (kamera)
+      { id:'brain',    x: 0,    z:-6.25, ry: Math.PI },     // sisi dalam tengah -> hadap +z
+      { id:'janitor',  x: 5.5,  z:-6.25, ry: Math.PI },     // sisi dalam kanan -> hadap +z
+      { id:'boss',     x:10.75, z:-8.5,  ry: Math.PI*0.6 }, // kepala meja, sudut kanan-jauh -> diagonal ke kamera
+    ];
+    const ROLES = {
+      trader:   { head:0xffd9b0, shirt:0x60a5fa, name:'Dip Trader' },
+      momentum: { head:0xf3d1b0, shirt:0xf87171, name:'Momentum-kun' },
+      janitor:  { head:0xb07b4f, shirt:0xfbbf24, name:'Security' },
+      risk:     { head:0xc98850, shirt:0x34d399, name:'Risk Manager' },
+      brain:    { head:0xffd9b0, shirt:0xa78bfa, name:'Brain Analyst' },
+      boss:     { head:0xf2c19b, shirt:0x475569, name:'Director' },
     };
-    Object.values(team).forEach(c => { desk(c.position.x, c.position.z - 1.9, 0); chair(c); addMonitorGlow(c.position.x, c.position.z); });
+    const team = {};
+    DESK_LAYOUT.forEach(d => {
+      const r = ROLES[d.id];
+      const c = character(d.x, d.z, r.head, r.shirt, r.name, d.ry);
+      team[d.id] = c;
+      const fx = -Math.sin(d.ry), fz = -Math.cos(d.ry); // arah hadap (ke monitor)
+      desk(d.x + fx*1.9, d.z + fz*1.9, d.ry);
+      chair(c, d.ry);
+      addMonitorGlow(d.x + fx*1.0, d.z + fz*1.0);
+      floorLamp(d.x - Math.cos(d.ry)*2.6, d.z + Math.sin(d.ry)*2.6); // samping kursi
+    });
 
     // Clean White Marquee PnL Billboard
     const bbCanvas = D.createElement('canvas'); bbCanvas.width = 512; bbCanvas.height = 200;
     const bbTex = new THREE.CanvasTexture(bbCanvas);
     const billboard = new THREE.Sprite(new THREE.SpriteMaterial({ map: bbTex, transparent: true }));
     billboard.scale.set(12, 4.7, 1);
-    billboard.position.set(0, 7.6, -10.5);
+    billboard.position.set(-15.5, 8, -6); // sementara: kiri ruangan, tidak menumpuk wallScreen
     billboard.material.depthTest = false;
     billboard.renderOrder = 50;
     scene.add(billboard);
@@ -480,6 +535,8 @@
       renderer.render(scene, cam);
     }
     loop();
+
+    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG };
 
   </script>
 </body></html>
