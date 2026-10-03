@@ -163,6 +163,8 @@
       GLOW_EMISSIVE: 2.5,
       AO_RADIUS: 2.5, AO_INTENSITY: 1.0,
       FPS_FALLBACK: 24,
+      LED_IDLE_INTENSITY: 1.2,
+      MONITOR_LIGHTS_ENABLED: true, LAMP_LIGHTS_ENABLED: true, SHADOW_MAP_SIZE: 2048,
       DEBUG: true,
     };
 
@@ -196,7 +198,7 @@
     const keyLight = new THREE.DirectionalLight(CONFIG.LIGHT_SUN_COLOR, CONFIG.LIGHT_SUN_INTENSITY);
     keyLight.position.set(...CONFIG.LIGHT_SUN_FROM);
     keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.mapSize.set(CONFIG.SHADOW_MAP_SIZE, CONFIG.SHADOW_MAP_SIZE);
     const SB = CONFIG.LIGHT_SHADOW_BOUNDS;
     keyLight.shadow.camera.left = -SB; keyLight.shadow.camera.right = SB;
     keyLight.shadow.camera.top = SB; keyLight.shadow.camera.bottom = -SB;
@@ -352,8 +354,10 @@
       bulb.material = lampBulbMat;
       glowRegistry.push({ label: 'lamp-bulb', mat: bulb.material });
       g.position.set(x, 0, z); scene.add(g);
-      const l = new THREE.PointLight(CONFIG.LIGHT_LAMP_COLOR, CONFIG.LIGHT_LAMP_INTENSITY, CONFIG.LIGHT_LAMP_DISTANCE, 2);
-      l.position.set(x, 5.0, z); scene.add(l);
+      if (CONFIG.LAMP_LIGHTS_ENABLED) {
+        const l = new THREE.PointLight(CONFIG.LIGHT_LAMP_COLOR, CONFIG.LIGHT_LAMP_INTENSITY, CONFIG.LIGHT_LAMP_DISTANCE, 2);
+        l.position.set(x, 5.0, z); scene.add(l);
+      }
     }
 
     // Furniture — monitor gaya laptop: puncak 2.09 < bawah mata 2.44 -> wajah
@@ -372,6 +376,14 @@
       glowRegistry.push({ label: 'monitor-screen', mat: scrMat });
       const scr = new THREE.Mesh(geoBox(1.5, 0.78, 0.05), scrMat);
       scr.position.set(0, mY + 0.02, 0.07); scr.castShadow = true; scr.receiveShadow = true; scr.name = 'screen'; mon.add(scr);
+      // LED status di PUNGGUNG monitor (sisi kamera): strip tepi atas + logo bar
+      const ledMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x60a5fa, emissiveIntensity: CONFIG.LED_IDLE_INTENSITY });
+      glowRegistry.push({ label: 'monitor-led', mat: ledMat });
+      const strip = new THREE.Mesh(geoBox(1.72, 0.06, 0.16), ledMat);
+      strip.position.set(0, mY + 0.52, 0.02); mon.add(strip);
+      const logo = new THREE.Mesh(geoBox(0.5, 0.18, 0.08), ledMat);
+      logo.position.set(0, mY - 0.12, -0.09); mon.add(logo);
+      strip.name = 'monitor-led';
       g.add(mon);
       g.position.set(x, 0, z);
       g.rotation.y = rot;
@@ -533,8 +545,9 @@
       const ch = chair(c, d.ry); ch.name = 'chair-' + d.id;
       c.userData.chair = ch;
       c.userData.screen = c.userData.desk.getObjectByName('screen');
-      c.userData.screenEmissive = 0xbfe9ff;
-      addMonitorGlow(d.x + fx*1.1, d.z + fz*1.1); // ikut posisi monitor baru
+      c.userData.ledMat = c.userData.desk.getObjectByName('monitor-led').material;
+      c.userData.roleColor = r.color;
+      if (CONFIG.MONITOR_LIGHTS_ENABLED) addMonitorGlow(d.x + fx*1.1, d.z + fz*1.1); // ikut posisi monitor baru
       floorLamp(d.x - Math.cos(d.ry)*2.6, d.z + Math.sin(d.ry)*2.6, d.id);
       if (d.id === 'brain') {
         const h = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45), holoMat);
@@ -596,7 +609,6 @@
     let lastFocusAt = -1e9;
     // tinggi ring: di atas lapisan teratas di bawahnya (karpet inner top 0.37, logo 0.45; lantai 0.25)
     function ringY(x, z) { return (Math.abs(x) <= 15 && z >= -5.5 && z <= 12.5) ? 0.47 : 0.30; }
-    function restoreScreen(st) { if (st.screen) st.screen.material.emissive.setHex(st.screenEmissive); }
     function tryFocus(agentId) {
       const now = performance.now();
       if (focusState.active) return;
@@ -617,17 +629,17 @@
         u.isWorking = CONFIG.LEGACY_AUTO_TYPING === true;
         hideBubble(agentId); setLabelActive(agentId, false);
         st.ringMat.emissive.setHex(0x64748b); st.ringMat.emissiveIntensity = 0.9; st.ringMat.opacity = 0.35;
-        restoreScreen(st); u.thinkTilt = 0;
+        u.thinkTilt = 0;
       } else if (state === 'thinking') {
         u.isWorking = false;
         showBubble(agentId, '...', 'think');
         st.ringMat.emissive.setHex(0xfacc15); st.ringMat.emissiveIntensity = 1.2; st.ringMat.opacity = 0.8;
-        restoreScreen(st); setLabelActive(agentId, true); u.thinkTilt = u.thinkTilt || 0;
+        setLabelActive(agentId, true); u.thinkTilt = u.thinkTilt || 0;
       } else if (state === 'acting') {
         u.isWorking = true;
         showBubble(agentId, text, 'info');
         st.ringMat.emissive.setHex(0x10b981); st.ringMat.emissiveIntensity = 1.4; st.ringMat.opacity = 0.85;
-        setLabelActive(agentId, true); restoreScreen(st);
+        setLabelActive(agentId, true);
         if (opts.focus) tryFocus(agentId);
       } else if (state === 'alert') {
         u.isWorking = false;
@@ -640,9 +652,10 @@
       const now = performance.now();
       const rows = DESK_LAYOUT.map(d => {
         const st = agentStates[d.id];
+        const lm = st.ledMat;
         return { agent: d.id, state: st.state, sisa_ms: Math.max(0, Math.round(st.until - now)),
                  ring: st.ringMat.emissive.getHexString(),
-                 monitor: st.screen ? (st.screen.material.color.getHex() === st.screenOrig ? 'normal' : 'flicker') : '-' };
+                 led: lm ? lm.emissive.getHexString() + ' @' + lm.emissiveIntensity.toFixed(1) : '-' };
       });
       console.table(rows); return rows;
     }
@@ -670,7 +683,7 @@
       const cp = a.userData.chair.position;
       ring.position.set(cp.x, ringY(cp.x, cp.z), cp.z);
       scene.add(ring);
-      agentStates[d.id] = { state: 'idle', until: 0, text: '', ring, ringMat: m, screen: a.userData.screen, screenOrig: a.userData.screenOrig };
+      agentStates[d.id] = { state: 'idle', until: 0, text: '', ring, ringMat: m, ledMat: a.userData.ledMat };
     });
 
     // ---- Bubble CSS2D (API; disambungkan ke state machine di 5b) ----
@@ -913,7 +926,8 @@
     const clock = new THREE.Clock();
     let animPaused = false;
     let fpsFrames = 0, fpsLast = performance.now(), fpsDiv = null;
-    let fpsAccum = [], aoFallbackDone = false;
+    let winAccum = [], lowWin = 0, aoFallbackDone = false;
+    const BOOT_MS = performance.now();
     if (CONFIG.DEBUG) {
       fpsDiv = D.createElement('div');
       fpsDiv.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.8);color:#a5f3fc;font:700 12px "JetBrains Mono",monospace;padding:3px 10px;border-radius:10px;z-index:30;pointer-events:none';
@@ -932,11 +946,17 @@
           fpsFrames = 0; fpsLast = nw;
           fpsAccum.push(fps);
           if (fpsAccum.length > 6) fpsAccum.shift();
-          if (CONFIG.ENABLE_POSTFX && !aoFallbackDone && aoPass && aoPass.enabled && fpsAccum.length >= 6) {
-            const avg = fpsAccum.reduce((a2, b2) => a2 + b2, 0) / fpsAccum.length;
-            if (avg < CONFIG.FPS_FALLBACK) {
-              aoPass.enabled = false; aoFallbackDone = true;
-              console.warn('[office] avg FPS ' + avg.toFixed(0) + ' < ' + CONFIG.FPS_FALLBACK + ' — AO dimatikan otomatis (bloom dipertahankan)');
+          const bootOk = performance.now() - BOOT_MS > 10000;
+          if (CONFIG.ENABLE_POSTFX && !aoFallbackDone && aoPass && aoPass.enabled && bootOk) {
+            winAccum.push(fps);
+            if (winAccum.length >= 6) { // jendela 3 dtk
+              const avg = winAccum.reduce((a2, b2) => a2 + b2, 0) / winAccum.length;
+              winAccum = [];
+              if (avg < CONFIG.FPS_FALLBACK) lowWin++; else lowWin = 0;
+              if (lowWin >= 3) {
+                aoPass.enabled = false; aoFallbackDone = true;
+                console.warn('[office] 3 jendela 3-dtk di bawah ' + CONFIG.FPS_FALLBACK + ' FPS — AO dimatikan (bloom dipertahankan)');
+              }
             }
           }
         }
@@ -954,9 +974,16 @@
           const st = agentStates[u.id];
           if (st) {
             if (st.state !== 'idle' && performance.now() > st.until) setAgentState(u.id, 'idle');
+            const ledM = u.ledMat;
+            if (ledM && CONFIG.MONITOR_LIGHTS_ENABLED) {
+              const rc = u.roleColor;
+              if (st.state === 'alert') { ledM.emissive.setHex(0xff4444); ledM.emissiveIntensity = Math.sin(t * 16) > 0 ? 3.5 : 0.4; }
+              else if (st.state === 'acting') { ledM.emissive.setHex(0x10b981); ledM.emissiveIntensity = 1.6 + 0.9 * Math.sin(t * 6); }
+              else if (st.state === 'thinking') { ledM.emissive.setHex(0xfacc15); ledM.emissiveIntensity = 1.3 + 0.5 * Math.sin(t * 2); }
+              else { ledM.emissive.setHex(rc); ledM.emissiveIntensity = CONFIG.LED_IDLE_INTENSITY; }
+            }
             if (st.state === 'alert') {
               st.ringMat.emissiveIntensity = 1.0 + 1.5 * Math.abs(Math.sin(t * 6));
-              if (st.screen) st.screen.material.emissive.setHex(Math.sin(t * 10) > 0 ? 0xff4444 : st.screenEmissive);
             }
             const tiltTarget = st.state === 'thinking' ? CONFIG.THINK_TILT : 0;
             u.thinkTilt = (u.thinkTilt || 0) + (tiltTarget - (u.thinkTilt || 0)) * Math.min(1, dt * 5);
@@ -1128,7 +1155,67 @@
       console.table(glowRegistry.map(g2 => ({ material: g2.label, emissiveIntensity: g2.mat.emissiveIntensity })));
       setTimeout(() => { bloomPass.strength = prev; console.warn('bloomProbe selesai — strength dikembalikan'); }, 3000);
     }
-    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react, setAgentState, getStates, debugDemo, stopDemo, setPostfx, togglePass, bloomProbe };
+    function monitorVisibility() {
+      const cams = sweepCameras(); const names = ['CAMERA_START', 'SWEEP kanan +25°', 'SWEEP kiri -25°'];
+      const rows = [];
+      const items = DESK_LAYOUT.map(d => ({ label: 'monitor-' + d.id, pos: team[d.id].userData.desk.position, normal: new THREE.Vector3(Math.sin(d.ry), 0, Math.cos(d.ry)) }));
+      items.push({ label: 'wallScreen', pos: new THREE.Vector3(8.6, 8.3, -12.35), normal: new THREE.Vector3(0, 0, 1) });
+      items.forEach(it => cams.forEach((cp, ci) => {
+        const toCam = new THREE.Vector3(cp[0] - it.pos.x, cp[1] - it.pos.y, cp[2] - it.pos.z).normalize();
+        const dot = it.normal.dot(toCam);
+        rows.push({ layar: it.label, dari: names[ci], sisi: dot > 0 ? 'DEPAN' : 'PUNGGUNG', sudut_deg: +THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(dot, -1, 1))).toFixed(1) });
+      }));
+      console.table(rows); return rows;
+    }
+    function measureFps(ms) {
+      return new Promise(res => {
+        let n = 0; const t0 = performance.now();
+        (function tick() { n++; const nw = performance.now(); if (nw - t0 >= ms) { res(n * 1000 / (nw - t0)); return; } requestAnimationFrame(tick); })();
+      });
+    }
+    async function fpsReport() {
+      const rows = [];
+      const savedAo = aoPass.enabled;
+      CONFIG.ENABLE_POSTFX = false; await new Promise(r => setTimeout(r, 300));
+      rows.push({ mode: 'postfx off', fps: +(await measureFps(5000)).toFixed(1) });
+      CONFIG.ENABLE_POSTFX = true; aoPass.enabled = false; await new Promise(r => setTimeout(r, 300));
+      rows.push({ mode: 'postfx tanpa AO', fps: +(await measureFps(5000)).toFixed(1) });
+      aoPass.enabled = savedAo; await new Promise(r => setTimeout(r, 300));
+      rows.push({ mode: 'postfx penuh', fps: +(await measureFps(5000)).toFixed(1) });
+      console.table(rows); return rows;
+    }
+    function labelOverlap() {
+      const statCam = new THREE.PerspectiveCamera(CONFIG.CAMERA_FOV, 16 / 9, 0.1, 300);
+      const cams = sweepCameras(); const names = ['CAMERA_START', 'SWEEP kanan +25°', 'SWEEP kiri -25°'];
+      const PW = 1920, PH = 1080; const rows = [];
+      cams.forEach((cp, ci) => {
+        statCam.position.set(cp[0], cp[1], cp[2]); statCam.lookAt(new THREE.Vector3(...CONFIG.CAMERA_TARGET));
+        const rects = [];
+        Object.entries(team).forEach(([id, a]) => {
+          if (!a.userData.label) return;
+          const lw = ROLES[id].name.length * CONFIG.LABEL_FONT_PX * 0.62 + 34;
+          const p = a.userData.label.obj.position.clone().project(statCam);
+          const cx2 = (p.x + 1) / 2 * PW, cy2 = (1 - p.y) / 2 * PH;
+          rects.push({ id, type: 'label', x0: cx2 - lw/2, x1: cx2 + lw/2, y0: cy2 - 14, y1: cy2 + 14 });
+          const bp = a.position.clone().setY(1.2).project(statCam);
+          const bcx = (bp.x + 1) / 2 * PW, bcy = (1 - bp.y) / 2 * PH;
+          rects.push({ id: id + '-body', type: 'body', x0: bcx - 45, x1: bcx + 45, y0: bcy - 45, y1: bcy + 45 });
+        });
+        const labels = rects.filter(r => r.type === 'label');
+        for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j++) {
+          const a1 = labels[i], b1 = labels[j];
+          if (a1.x0 < b1.x1 && b1.x0 < a1.x1 && a1.y0 < b1.y1 && b1.y0 < a1.y1)
+            rows.push({ kamera: names[ci], konflik: 'label-label', a: a1.id, b: b1.id });
+        }
+        labels.forEach(l => rects.filter(r => r.type === 'body' && r.id !== l.id + '-body').forEach(r => {
+          if (l.x0 < r.x1 && r.x0 < l.x1 && l.y0 < r.y1 && r.y0 < l.y1)
+            rows.push({ kamera: names[ci], konflik: 'label-vs-badan', a: l.id, b: r.id });
+        }));
+      });
+      if (!rows.length) rows.push({ kamera: 'SEMUA', konflik: 'BERSIH', a: '-', b: '-' });
+      console.table(rows); return rows;
+    }
+    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react, setAgentState, getStates, debugDemo, stopDemo, setPostfx, togglePass, bloomProbe, monitorVisibility, fpsReport, labelOverlap };
 
   </script>
 </body></html>
