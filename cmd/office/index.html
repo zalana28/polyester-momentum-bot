@@ -26,6 +26,14 @@
     .fitem b { color: #6366f1; }
     .profit { color: #10b981; }
     .loss { color: #ef4444; }
+    .agent-label { background: rgba(15,23,42,0.85); color:#fff; padding:4px 10px; border-radius:10px; display:flex; align-items:center; gap:7px; pointer-events:none; white-space:nowrap; transition:opacity 200ms ease; }
+    .agent-label .dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+    .agent-label.dim { opacity:0.5; }
+    .agent-bubble { background:rgba(255,255,255,0.92); color:#0f172a; padding:7px 12px; border-radius:12px; box-shadow:0 4px 14px rgba(0,0,0,0.2); opacity:0; transition:opacity 200ms ease; pointer-events:none; white-space:nowrap; position:relative; font-family:'Plus Jakarta Sans',sans-serif; }
+    .agent-bubble.show { opacity:0.92; }
+    .agent-bubble::after { content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%); border:6px solid transparent; border-top-color:rgba(255,255,255,0.92); }
+    .agent-bubble-alert { background:#fee2e2; color:#7f1d1d; }
+    .agent-bubble-alert::after { border-top-color:#fee2e2; }
   </style>
 </head>
 <body>
@@ -75,6 +83,7 @@
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
     const D = document;
     const container = D.getElementById('canvas-container');
@@ -122,6 +131,8 @@
       ANIM_BLINK_MIN: 3, ANIM_BLINK_MAX: 5, ANIM_BLINK_CLOSE: 0.12,
       ANIM_TYPE_SPEED: 14, ANIM_TYPE_AMP: 0.15, ANIM_WORK_BLEND: 6,
       HOLO_SPIN: 0.8, HOLO_BOB: 0.08,
+      LABEL_FONT_PX: 15, LABEL_OFFSET_Z: 1.7, LABEL_Y: 0.12,
+      BUBBLE_FONT_PX: 16, BUBBLE_MAX: 3, BUBBLE_Y: 4.1, BUBBLE_FADE_MS: 200,
       DEBUG: true,
     };
 
@@ -139,6 +150,10 @@
     renderer.toneMappingExposure = 1.0;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(renderer.domElement);
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    labelRenderer.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:5;';
+    container.appendChild(labelRenderer.domElement);
 
     // ---- Pencahayaan (Fase 1): hemisphere pengisi + matahari + glow lokal ----
     scene.add(new THREE.HemisphereLight(CONFIG.LIGHT_FILL_SKY, CONFIG.LIGHT_FILL_GROUND, CONFIG.LIGHT_FILL_INTENSITY));
@@ -417,17 +432,7 @@
         part(0.34, 0.62, 0.06, 0xf8fafc, 0, 1.45, -0.46, false); // kemeja
         part(0.16, 0.5, 0.05, 0xdc2626, 0, 1.38, -0.5, false);   // dasi merah
       }
-      // name-tag sprite lama (dipertahankan sampai Fase 5)
-      const cv = D.createElement('canvas'); cv.width = 256; cv.height = 64;
-      const cx = cv.getContext('2d');
-      cx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-      cx.beginPath(); cx.roundRect(0, 0, 256, 64, 16); cx.fill();
-      cx.fillStyle = '#475569'; cx.font = 'bold 26px "Plus Jakarta Sans", sans-serif';
-      cx.textAlign = 'center'; cx.fillText(name, 128, 42);
-      const tex = new THREE.CanvasTexture(cv);
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-      sp.scale.set(4, 1, 1); sp.position.y = 4.0;
-      g.add(sp);
+      // name-tag sprite lama dihapus (Fase 5a): diganti label CSS2D di lantai
 
       g.position.set(x, 0, z);
       g.rotation.y = ry;
@@ -500,6 +505,58 @@
         c.userData.desk.add(np);
       }
     });
+
+    // ---- Label nama CSS2D (Fase 5a): di lantai sisi kamera, tidak menimpa wajah/monitor ----
+    function setLabelActive(agentId, on) {
+      const a = team[agentId];
+      if (a && a.userData.label) a.userData.label.el.classList.toggle('dim', !on);
+    }
+    Object.entries(team).forEach(([id, c]) => {
+      const d = DESK_LAYOUT.find(l => l.id === id);
+      const div = D.createElement('div');
+      div.className = 'agent-label';
+      div.style.fontSize = CONFIG.LABEL_FONT_PX + 'px';
+      const dot = D.createElement('span'); dot.className = 'dot';
+      dot.style.background = '#' + ROLES[id].color.toString(16).padStart(6, '0');
+      const nm = D.createElement('span'); nm.textContent = ROLES[id].name;
+      div.append(dot, nm);
+      const lo = new CSS2DObject(div);
+      lo.position.set(c.userData.desk.position.x, CONFIG.LABEL_Y, c.userData.desk.position.z + CONFIG.LABEL_OFFSET_Z);
+      scene.add(lo);
+      c.userData.label = { el: div, obj: lo };
+    });
+
+    // ---- Bubble CSS2D (API; disambungkan ke state machine di 5b) ----
+    const bubbleAgents = {};
+    function showBubble(agentId, text, tone = 'info', durationMs = 0) {
+      const a = team[agentId];
+      if (!a) return;
+      const keys = Object.keys(bubbleAgents);
+      if (!bubbleAgents[agentId] && keys.length >= CONFIG.BUBBLE_MAX) {
+        let oldest = keys[0];
+        keys.forEach(k => { if (bubbleAgents[k].ts < bubbleAgents[oldest].ts) oldest = k; });
+        hideBubble(oldest);
+      }
+      hideBubble(agentId);
+      const el = D.createElement('div');
+      el.className = 'agent-bubble' + (tone === 'alert' ? ' agent-bubble-alert' : '');
+      const txt = String(text || '');
+      el.textContent = txt.length > 60 ? txt.slice(0, 57) + '...' : txt;
+      el.style.fontSize = CONFIG.BUBBLE_FONT_PX + 'px';
+      const o = new CSS2DObject(el);
+      o.position.set(a.position.x, CONFIG.BUBBLE_Y, a.position.z);
+      a.add(o);
+      bubbleAgents[agentId] = { el, o, ts: performance.now() };
+      requestAnimationFrame(() => el.classList.add('show'));
+      if (durationMs > 0) setTimeout(() => hideBubble(agentId), durationMs);
+    }
+    function hideBubble(agentId) {
+      const b = bubbleAgents[agentId];
+      if (!b) return;
+      delete bubbleAgents[agentId];
+      b.el.classList.remove('show');
+      setTimeout(() => { b.o.removeFromParent(); b.el.remove(); }, CONFIG.BUBBLE_FADE_MS + 30);
+    }
 
     // Clean White Marquee PnL Billboard
     const bbCanvas = D.createElement('canvas'); bbCanvas.width = 512; bbCanvas.height = 200;
@@ -668,6 +725,7 @@
       cam.aspect = window.innerWidth / window.innerHeight;
       cam.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      labelRenderer.setSize(window.innerWidth, window.innerHeight);
     });
 
     // Animation Loop
@@ -743,6 +801,7 @@
         updateCameraRig(dt);
       }
       renderer.render(scene, cam);
+      labelRenderer.render(scene, cam);
     }
     loop();
 
@@ -819,7 +878,7 @@
       console.table(rows);
       return rows;
     }
-    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim };
+    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react };
 
   </script>
 </body></html>
