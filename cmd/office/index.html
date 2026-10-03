@@ -1,192 +1,313 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="utf-8">
-<title>Kantor AI — Tim Trading Bot</title>
-<style>
-  html,body{margin:0;height:100%;overflow:hidden;background:#141824;font-family:-apple-system,'Segoe UI',sans-serif}
-  #ui{position:fixed;left:16px;top:14px;color:#fff;text-shadow:0 2px 6px #000a;z-index:5;pointer-events:none}
-  #ui h1{font-size:20px;margin:0 0 4px}
-  #ui .pnl{font-size:30px;font-weight:800}
-  #feed{position:fixed;right:16px;top:14px;width:330px;max-height:70vh;overflow:hidden;z-index:5;pointer-events:none}
-  .fitem{background:#ffffff14;color:#eef;border-radius:8px;padding:5px 9px;margin-bottom:5px;font-size:12px;backdrop-filter:blur(4px)}
-  .fitem b{color:#ffd54a}
-  #help{position:fixed;bottom:10px;left:16px;color:#ffffff66;font-size:11px;z-index:5}
-</style>
+<!DOCTYPE html><html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Office — Trading Bot Team</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: #fdfaf5; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; }
+    canvas { display: block; }
+    .glass-panel { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
+    .font-mono-trading { font-family: 'JetBrains Mono', monospace; }
+    #ui-layer { pointer-events: none; }
+    #ui-layer * { pointer-events: auto; }
+    .fitem { background: rgba(255, 255, 255, 0.8); color: #4b5563; border-radius: 12px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; border: 1px solid rgba(0,0,0,0.05); box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
+    .fitem b { color: #6366f1; }
+    .profit { color: #10b981; }
+    .loss { color: #ef4444; }
+  </style>
 </head>
 <body>
-<div id="ui">
-  <h1>🏢 Kantor AI — Tim Trading Bot</h1>
-  <div>PnL total strategi: <span class="pnl" id="pnl">$0.00</span></div>
-  <div id="wl">siklus 0 · ✓0 ✗0</div>
-</div>
-<div id="feed"></div>
-<div id="help">geser mouse = putar kamera · scroll = zoom · server read-only, bot tidak terganggu</div>
-<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-<script>
-const W=window, D=document;
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x141824);
-scene.fog=new THREE.Fog(0x141824,60,140);
-const cam=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.1,300);
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);
-D.body.appendChild(renderer.domElement);
-addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+  <div id="root" class="relative w-screen h-screen overflow-hidden">
+    <!-- HUD Overlay -->
+    <div id="ui-layer" class="absolute inset-0 z-10 p-6 flex flex-col justify-between">
+      
+      <div class="flex justify-between items-start">
+        <div class="glass-panel p-6 max-w-sm">
+          <h1 class="text-lg font-semibold flex items-center gap-2 mb-2 text-slate-800">
+            <iconify-icon icon="lucide:layout-dashboard" class="text-indigo-500"></iconify-icon>
+            AI Trading Office — Team Monitor
+          </h1>
+          <div class="text-slate-500 text-sm font-medium">Total Strategy PnL</div>
+          <div id="pnl-text" class="text-3xl font-extrabold text-[#10b981] font-mono-trading tracking-tight my-1">+0.00 USD</div>
+          <div id="wl-text" class="text-xs text-slate-400 font-semibold uppercase tracking-wider">0 cycles · ✓0 ✗0</div>
+        </div>
 
-scene.add(new THREE.AmbientLight(0xbcd0ff,1.1));
-const sun=new THREE.DirectionalLight(0xffffff,1.6);sun.position.set(18,30,12);scene.add(sun);
+        <div id="feed-container" class="w-80 flex flex-col items-end">
+          <div id="feed-list" class="w-full space-y-2 max-h-[60vh] overflow-hidden">
+            <!-- Real-time events injected here -->
+            <div class="fitem"><b>16:06:59</b> cycle BTC-USDT: price runaway - skipping</div>
+            <div class="fitem"><b>15:55:57</b> cycle BNB-USDT: price runaway - skipping</div>
+            <div class="fitem"><b>15:49:43</b> AVAX-USDT skip: trend-down - avoiding knife</div>
+             <div class="fitem"><b>15:39:04</b> DOGE-USDT: momentum entry skip - low vol</div>
+          </div>
+        </div>
+      </div>
 
-// ---- lantai + dekorasi ----
-const mat=(c)=>new THREE.MeshLambertMaterial({color:c});
-const box=(w,h,d,c,x,y,z,parent)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(c));m.position.set(x,y,z);(parent||scene).add(m);return m};
-box(60,0.5,44,0x2b3350,0,0,0);                       // lantai
-box(60,0.2,44,0x3a4470,0,0.26,0);                    // karpet kerja
-for(let i=0;i<8;i++){ box(3,0.4,1.2,0x8a5a33,-24+i*6.8,-0.1,-20); box(1.6,2.6,1.2,0xa06a3d,-24+i*6.8,1.2,-20);} // rak kayu
-box(14,9,0.6,0xf4f0e6,0,4.5,-21);                    // dinding belakang
-box(5,3,0.1,0x9fd8ff,-3,5,-20.6);box(5,3,0.1,0x9fd8ff,3,5,-20.6); // layar
+      <div class="flex justify-between items-end">
+        <div class="text-[10px] text-slate-400 tracking-widest uppercase bg-white/50 backdrop-blur-md px-4 py-2 rounded-full border border-white/80 shadow-sm">
+          drag mouse to rotate · scroll to zoom · read-only live studio
+        </div>
+        <div class="flex gap-4">
+          <div class="glass-panel px-4 py-2 flex items-center gap-2 text-xs font-semibold text-slate-600">
+             <div class="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></div>
+             LIVE STREAM
+          </div>
+        </div>
+      </div>
+    </div>
 
-// ---- meja + komputer ----
-function desk(x,z,rot){
-  const g=new THREE.Group();
-  box(4.6,0.3,2.2,0xd9c9a8,0,1.5,0,g);
-  box(0.3,1.5,2,0xb8a683,-2.1,0.75,0,g);box(0.3,1.5,2,0xb8a683,2.1,0.75,0,g);
-  box(1.6,1,0.12,0x22283e,0,2.35,-0.5,g);            // monitor
-  box(1.4,0.8,0.05,0x7fe3ff,0,2.35,-0.42,g);         // layar nyala
-  g.position.set(x,0,z);g.rotation.y=rot;scene.add(g);return g;
-}
+    <!-- 3D Canvas Container -->
+    <div id="canvas-container" class="absolute inset-0 z-0"></div>
+  </div>
 
-// ---- karakter voxel ----
-function character(x,z,color,shirt,name){
-  const g=new THREE.Group();
-  box(0.9,0.9,0.9,color,0,2.35,0,g);                 // kepala
-  box(1.0,1.3,0.65,shirt,0,1.25,0,g);                // badan
-  box(0.28,0.9,0.28,shirt,-0.66,1.35,0,g).name='armL';
-  box(0.28,0.9,0.28,shirt,0.66,1.35,0,g).name='armR';
-  box(0.32,0.55,0.32,0x2b2b3a,-0.25,0.28,0,g);box(0.32,0.55,0.32,0x2b2b3a,0.25,0.28,0,g);
-  const cv=D.createElement('canvas');cv.width=256;cv.height=64;
-  const cx=cv.getContext('2d');cx.fillStyle='#101322cc';cx.fillRect(0,0,256,64);
-  cx.fillStyle='#ffe27a';cx.font='bold 30px sans-serif';cx.textAlign='center';cx.fillText(name,128,42);
-  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
-  sp.scale.set(4,1,1);sp.position.y=3.6;g.add(sp);
-  g.position.set(x,0,z);g.userData={t:Math.random()*9};scene.add(g);return g;
-}
+  <script>
+    const D = document;
+    const container = D.getElementById('canvas-container');
 
-const team={
-  trader:  character(-6,4,0xffc48a,0x3f6df0,'Dip Trader'),
-  momentum:character(6,4,0xf3d1b0,0xe2574c,'Momentum-kun'),
-  risk:    character(-2,9,0xc98850,0x2fa864,'Risk Manager'),
-  brain:   character(2,9,0xffd9b0,0x9a5ce0,'Brain Analyst'),
-  janitor: character(-10,9,0xb07b4f,0xd9a13b,'Penjaga'),
-  boss:    character(10,9,0xf2c19b,0x1f2a44,'Boss')
-};
-Object.values(team).forEach(c=>{ desk(c.position.x,c.position.z-1.6,0); });
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf5f7fa);
+    scene.fog = new THREE.Fog(0xf5f7fa, 80, 200);
 
-// ---- Billboard PnL di dinding ----
-const bb=D.createElement('canvas');bb.width=512;bb.height=160;
-const bbTex=new THREE.CanvasTexture(bb);
-const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex,transparent:true}));
-billboard.scale.set(13,4,1);billboard.position.set(0,7.2,-20.3);scene.add(billboard);
-function drawBillboard(pnl,cy,w,l){
-  const c=bb.getContext('2d');c.clearRect(0,0,512,160);
-  c.fillStyle='#0d1122ee';c.fillRect(0,0,512,160);
-  c.strokeStyle='#3a4470';c.lineWidth=6;c.strokeRect(3,3,506,154);
-  c.fillStyle='#e8ecff';c.font='bold 34px sans-serif';c.textAlign='center';
-  c.fillText('PnL STRATEGI',256,48);
-  c.fillStyle=pnl>=0?'#43e97b':'#ff5d5d';c.font='bold 56px monospace';
-  c.fillText((pnl>=0?'+':'')+pnl.toFixed(2)+' USD',256,116);
-  c.fillStyle='#9fb0e8';c.font='24px sans-serif';
-  c.fillText(cy+' siklus · ✓'+w+' ✗'+l,256,148);
-  bbTex.needsUpdate=true;
-}
+    const cam = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 500);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
 
-// ---- partikel & emoji mengambang ----
-const floaters=[];
-function floatEmoji(txt,pos,color){
-  const cv=D.createElement('canvas');cv.width=256;cv.height=96;
-  const c=cv.getContext('2d');c.font='bold 44px sans-serif';c.textAlign='center';
-  c.fillStyle=color;c.fillText(txt,128,60);
-  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
-  sp.scale.set(3,1.15,1);sp.position.copy(pos);scene.add(sp);
-  floaters.push({sp,life:2.6});
-}
-const confetti=[];
-function burst(pos){
-  for(let i=0;i<40;i++){
-    const m=new THREE.Mesh(new THREE.BoxGeometry(.12,.12,.12),mat([0xffd54a,0x43e97b,0x4facfe,0xff5d8f][i%4]));
-    m.position.copy(pos);
-    scene.add(m);
-    confetti.push({m,v:new THREE.Vector3((Math.random()-.5)*7,5+Math.random()*4,(Math.random()-.5)*7),life:1.8});
-  }
-}
+    // Warm Daylight Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const keyLight = new THREE.DirectionalLight(0xfff5e6, 1.2);
+    keyLight.position.set(30, 50, 20);
+    keyLight.castShadow = true; keyLight.shadow.mapSize.set(2048,2048);
+    scene.add(keyLight);
 
-// ---- kamera isometrik + drag ----
-let ang=0.72,dist=38,height=26,drag=false,px=0;
-cam.position.set(0,height,dist);
-function placeCam(){cam.position.set(Math.sin(ang)*dist,height,Math.cos(ang)*dist);cam.lookAt(0,1.5,0)}
-placeCam();
-W.addEventListener('mousedown',e=>{drag=true;px=e.clientX});
-W.addEventListener('mouseup',()=>drag=false);
-W.addEventListener('mousemove',e=>{if(drag){ang+=(e.clientX-px)*0.005;px=e.clientX;placeCam()}});
-W.addEventListener('wheel',e=>{dist=Math.min(60,Math.max(18,dist+e.deltaY*0.02));placeCam()},{passive:true});
+    const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
-// ---- ambil state & reaksi ----
-let lastEvKey='';
-const KINDMAP={filled:['trader','🛒 FILL!','#43e97b'],momentum:['momentum','🚀 GANBATTE!','#ffd54a'],
-  sell:['trader','💰 SELL!','#4facfe'],sl:['risk','😭 SL...','#ff5d5d'],
-  profit:['boss','🎉 PROFIT!','#43e97b'],loss:['risk','📉 rugi kecil','#ff9d5d'],
-  skip:['brain','💤 skip','#9fb0e8']};
-function react(kind,sym,txt){
-  const m=KINDMAP[kind];if(!m)return;
-  const who=team[m[0]];
-  floatEmoji(m[1]+' '+(sym||''),who.position.clone().add(new THREE.Vector3(0,4.6,0)),m[2]);
-  who.userData.jump=1.6;
-  if(kind==='profit'||kind==='sell')burst(who.position.clone().add(new THREE.Vector3(0,3,0)));
-  if(kind==='sl'){who.userData.faint=2.2}
-  if(kind==='momentum'){who.userData.run=2.5}
-}
-async function poll(){
-  try{
-    const r=await fetch('/api/state');const s=await r.json();
-    D.getElementById('pnl').textContent=(s.total_net>=0?'+':'')+s.total_net.toFixed(2)+' USD';
-    D.getElementById('pnl').style.color=s.total_net>=0?'#43e97b':'#ff5d5d';
-    D.getElementById('wl').textContent='siklus '+s.cycles+' · ✓'+s.wins+' ✗'+s.losses;
-    drawBillboard(s.total_net,s.cycles,s.wins,s.losses);
-    const feed=D.getElementById('feed');feed.innerHTML='';
-    (s.events||[]).slice(0,9).forEach(e=>{
-      const d=D.createElement('div');d.className='fitem';
-      d.innerHTML='<b>'+e.ts+'</b> '+e.txt;feed.appendChild(d);
-    });
-    if(s.events&&s.events.length){
-      const key=s.events[0].ts+s.events[0].txt;
-      if(key!==lastEvKey){lastEvKey=key;react(s.events[0].kind,s.events[0].sym,s.events[0].txt)}
+    const box = (w, h, d, c, x, y, z, parent) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c));
+      m.position.set(x, y, z);
+      m.castShadow = true; m.receiveShadow = true;
+      (parent || scene).add(m);
+      return m;
+    };
+
+    // Room layout - Daylight Loft
+    const floor = box(100, 0.5, 80, 0xd9c4b1, 0, 0, 0); floor.castShadow = false; // Light oak floor
+    box(60, 0.2, 44, 0xccd5ae, 0, 0.26, 0); // Sage pastel rug
+
+    // Walls
+    box(40, 16, 0.8, 0xfaf9f6, 0, 8, -22); // Cream back wall
+    box(10, 6, 0.1, 0xaed9e0, -8, 8, -21.5); // Pastel Blue Window/Screen L
+    box(10, 6, 0.1, 0xaed9e0, 8, 8, -21.5); // Pastel Blue Window/Screen R
+
+    // Potted Plant Helpers
+    function plant(x, z) {
+      const p = new THREE.Group();
+      box(1.2, 1.4, 1.2, 0xd4a373, 0, 0.7, 0, p);
+      box(0.4, 2.5, 0.4, 0x606c38, 0, 2, 0, p);
+      p.position.set(x, 0, z);
+      scene.add(p);
     }
-  }catch(e){}
-}
-setInterval(poll,2000);poll();
+    plant(-26, -18); plant(26, -18);
 
-// ---- animasi ----
-const clock=new THREE.Clock();
-(function loop(){
-  requestAnimationFrame(loop);
-  const t=clock.getElapsedTime();
-  Object.values(team).forEach(c=>{
-    const u=c.userData;
-    c.position.y=Math.abs(Math.sin(t*2+u.t))*0.12;                 // napas idle
-    const aL=c.getObjectByName('armL'),aR=c.getObjectByName('armR');
-    if(u.jump>0){u.jump-=0.016;c.position.y+=Math.sin(Math.min(1,u.jump/1.6)*Math.PI)*1.2}
-    if(u.faint>0){u.faint-=0.016;c.rotation.z=Math.sin(u.faint*6)*0.9}else c.rotation.z=0;
-    if(u.run>0){u.run-=0.016;c.position.x+=Math.sin(t*10)*0.04}
-    if(aL&&aR){const s=Math.sin(t*9+u.t)*0.5;aL.rotation.x=-1.1+s;aR.rotation.x=-1.1-s} // ngetik
-  });
-  for(let i=confetti.length-1;i>=0;i--){const p=confetti[i];p.life-=0.016;
-    p.v.y-=0.15;p.m.position.addScaledVector(p.v,0.016);p.m.rotation.x+=0.2;p.m.rotation.z+=0.3;
-    if(p.life<=0){scene.remove(p.m);confetti.splice(i,1)}}
-  for(let i=floaters.length-1;i>=0;i--){const f=floaters[i];f.life-=0.016;
-    f.sp.position.y+=0.02;f.sp.material.opacity=Math.min(1,f.life);
-    if(f.life<=0){scene.remove(f.sp);floaters.splice(i,1)}}
-  renderer.render(scene,cam);
-})();
-</script>
-</body>
-</html>
+    // Furniture
+    function desk(x, z, rot) {
+      const g = new THREE.Group();
+      box(5.0, 0.3, 2.6, 0xfefae0, 0, 1.5, 0, g); // birch top
+      box(0.3, 1.5, 2.4, 0xfaedcd, -2.3, 0.75, 0, g); // leg L
+      box(0.3, 1.5, 2.4, 0xfaedcd, 2.3, 0.75, 0, g); // leg R
+      box(2.0, 1.3, 0.15, 0x334155, 0, 2.5, -0.6, g); // dark bezel monitor
+      box(1.8, 1.1, 0.05, 0xbae6fd, 0, 2.5, -0.52, g); // light cyan screen
+      g.position.set(x, 0, z);
+      g.rotation.y = rot;
+      scene.add(g);
+      return g;
+    }
+
+    // Character Factory - Vibrant Soft Colors
+    function character(x, z, headColor, shirtColor, name) {
+      const g = new THREE.Group();
+      box(1.0, 1.0, 1.0, headColor, 0, 2.45, 0, g); // head
+      box(1.2, 1.5, 0.8, shirtColor, 0, 1.2, 0, g); // body
+      const armL = box(0.3, 1.0, 0.3, shirtColor, -0.75, 1.3, 0, g);
+      const armR = box(0.3, 1.0, 0.3, shirtColor, 0.75, 1.3, 0, g);
+      armL.name = 'armL'; armR.name = 'armR';
+      box(0.35, 0.6, 0.35, 0x64748b, -0.3, 0.3, 0, g); // leg L
+      box(0.35, 0.6, 0.35, 0x64748b, 0.3, 0.3, 0, g); // leg R
+
+      // Name Tag - Light Clean Design
+      const cv = D.createElement('canvas'); cv.width = 256; cv.height = 64;
+      const cx = cv.getContext('2d');
+      cx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      cx.beginPath(); cx.roundRect(0, 0, 256, 64, 16); cx.fill();
+      cx.fillStyle = '#475569'; cx.font = 'bold 26px "Plus Jakarta Sans", sans-serif';
+      cx.textAlign = 'center'; cx.fillText(name, 128, 42);
+      const tex = new THREE.CanvasTexture(cv);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+      sp.scale.set(4, 1, 1); sp.position.y = 4.0;
+      g.add(sp);
+
+      g.position.set(x, 0, z);
+      g.userData = { t: Math.random() * 10, name };
+      scene.add(g);
+      return g;
+    }
+
+    const team = {
+      trader: character(-8, 4, 0xffd9b0, 0x60a5fa, 'Dip Trader'),
+      momentum: character(8, 4, 0xf3d1b0, 0xf87171, 'Momentum-kun'),
+      risk: character(-3, 10, 0xc98850, 0x34d399, 'Risk Manager'),
+      brain: character(3, 10, 0xffd9b0, 0xa78bfa, 'Brain Analyst'),
+      janitor: character(-12, 10, 0xb07b4f, 0xfbbf24, 'Security'),
+      boss: character(12, 10, 0xf2c19b, 0x475569, 'Director')
+    };
+    Object.values(team).forEach(c => desk(c.position.x, c.position.z - 1.8, 0));
+
+    // Clean White Marquee PnL Billboard
+    const bbCanvas = D.createElement('canvas'); bbCanvas.width = 512; bbCanvas.height = 200;
+    const bbTex = new THREE.CanvasTexture(bbCanvas);
+    const billboard = new THREE.Sprite(new THREE.SpriteMaterial({ map: bbTex, transparent: true }));
+    billboard.scale.set(15, 6, 1);
+    billboard.position.set(0, 9.5, -21);
+    scene.add(billboard);
+
+    function drawBillboard(pnl, cy, w, l) {
+      const c = bbCanvas.getContext('2d');
+      c.clearRect(0, 0, 512, 200);
+      c.fillStyle = '#ffffff';
+      c.beginPath(); c.roundRect(10, 10, 492, 180, 24); c.fill();
+      c.shadowBlur = 10; c.shadowColor = 'rgba(0,0,0,0.1)';
+      c.strokeStyle = '#e2e8f0'; c.lineWidth = 2; c.stroke();
+      c.shadowBlur = 0;
+      c.fillStyle = '#64748b'; c.font = 'bold 30px "Plus Jakarta Sans"'; c.textAlign = 'center';
+      c.fillText('STRATEGY PERFORMANCE', 256, 60);
+      c.fillStyle = pnl >= 0 ? '#10b981' : '#ef4444'; c.font = 'bold 76px "JetBrains Mono"';
+      c.fillText((pnl >= 0 ? '+' : '') + pnl.toFixed(2), 256, 140);
+      c.fillStyle = '#94a3b8'; c.font = '24px "Plus Jakarta Sans"';
+      c.fillText(cy + ' cycles · ' + w + ' wins · ' + l + ' losses', 256, 175);
+      bbTex.needsUpdate = true;
+    }
+    drawBillboard(0.00, 0, 0, 0);
+
+
+    // ---- LIVE DATA LAYER (real bot events) ----
+    const floaters=[], confetti=[];
+    function floatEmoji(txt,pos,color){
+      const cv=D.createElement('canvas');cv.width=256;cv.height=96;
+      const c=cv.getContext('2d');c.font='bold 40px "Plus Jakarta Sans", sans-serif';c.textAlign='center';
+      c.fillStyle=color;c.fillText(txt,128,60);
+      const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
+      sp.scale.set(3.4,1.3,1);sp.position.copy(pos);scene.add(sp);
+      floaters.push({sp,life:2.8});
+    }
+    function burst(pos){
+      const cols=[0x10b981,0xfbbf24,0x60a5fa,0xf87171,0xa78bfa];
+      for(let i=0;i<36;i++){
+        const m=new THREE.Mesh(new THREE.BoxGeometry(.14,.14,.14),mat(cols[i%5]));
+        m.position.copy(pos);scene.add(m);
+        confetti.push({m,v:new THREE.Vector3((Math.random()-.5)*7,5+Math.random()*4,(Math.random()-.5)*7),life:1.8});
+      }
+    }
+    const KINDMAP={filled:['trader','🛒 FILL!','#10b981'],momentum:['momentum','🚀 GANBATTE!','#f59e0b'],
+      sell:['trader','💰 SELL!','#3b82f6'],sl:['risk','😭 STOP-LOSS','#ef4444'],
+      profit:['boss','🎉 PROFIT!','#10b981'],loss:['risk','📉 small loss','#f97316'],
+      skip:['brain','💤 skip','#94a3b8']};
+    function react(kind,sym){
+      const m=KINDMAP[kind];if(!m)return;
+      const who=team[m[0]];
+      floatEmoji(m[1]+' '+(sym||''),who.position.clone().add(new THREE.Vector3(0,5,0)),m[2]);
+      who.userData.jump=1.6;
+      if(kind==='profit'||kind==='sell')burst(who.position.clone().add(new THREE.Vector3(0,3,0)));
+      if(kind==='sl')who.userData.faint=2.2;
+      if(kind==='momentum')who.userData.run=2.5;
+    }
+    let lastEvKey='';
+    async function poll(){
+      try{
+        const r=await fetch('/api/state');const s=await r.json();
+        const pnlEl=D.getElementById('pnl-text');
+        pnlEl.textContent=(s.total_net>=0?'+':'')+s.total_net.toFixed(2)+' USD';
+        pnlEl.style.color=s.total_net>=0?'#10b981':'#ef4444';
+        D.getElementById('wl-text').textContent=s.cycles+' cycles · ✓'+s.wins+' ✗'+s.losses;
+        drawBillboard(s.total_net,s.cycles,s.wins,s.losses);
+        const list=D.getElementById('feed-list');list.innerHTML='';
+        (s.events||[]).slice(0,8).forEach(e=>{
+          const d=D.createElement('div');d.className='fitem';
+          d.innerHTML='<b>'+e.ts+'</b> '+e.txt;list.appendChild(d);
+        });
+        if(s.events&&s.events.length){
+          const key=s.events[0].ts+s.events[0].txt;
+          if(key!==lastEvKey){lastEvKey=key;react(s.events[0].kind,s.events[0].sym)}
+        }
+      }catch(e){}
+    }
+    setInterval(poll,2000);poll();
+
+    // Camera Setup
+    let ang = 0.72, dist = 45, height = 32, drag = false, px = 0;
+    updateCam();
+
+    window.addEventListener('mousedown', e => { drag = true; px = e.clientX; });
+    window.addEventListener('mouseup', () => drag = false);
+    window.addEventListener('mousemove', e => {
+      if (drag) {
+        ang += (e.clientX - px) * 0.005;
+        px = e.clientX;
+        updateCam();
+      }
+    });
+    window.addEventListener('wheel', e => {
+      dist = Math.min(90, Math.max(25, dist + e.deltaY * 0.02));
+      updateCam();
+    }, { passive: true });
+
+    function updateCam() {
+      cam.position.set(Math.sin(ang) * dist, height, Math.cos(ang) * dist);
+      cam.lookAt(0, 2, 0);
+    }
+
+    window.addEventListener('resize', () => {
+      cam.aspect = window.innerWidth / window.innerHeight;
+      cam.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Animation Loop
+    const clock = new THREE.Clock();
+    function loop() {
+      requestAnimationFrame(loop);
+      const t = clock.getElapsedTime();
+
+      Object.values(team).forEach(c => {
+        const u = c.userData;
+        c.position.y = Math.abs(Math.sin(t * 1.2 + u.t)) * 0.12;
+        const aL = c.getObjectByName('armL');
+        const aR = c.getObjectByName('armR');
+        if (aL && aR) {
+          const move = Math.sin(t * 7 + u.t) * 0.2;
+          aL.rotation.x = -1.1 + move;
+          aR.rotation.x = -1.1 - move;
+        }
+        if (u.jump > 0) { u.jump -= 0.016; c.position.y += Math.sin(Math.min(1, u.jump / 1.6) * Math.PI) * 1.3; }
+        if (u.faint > 0) { u.faint -= 0.016; c.rotation.z = Math.sin(u.faint * 6) * 0.9; } else c.rotation.z = 0;
+        if (u.run > 0) { u.run -= 0.016; c.position.x += Math.sin(t * 10) * 0.04; }
+      });
+      for (let i = confetti.length - 1; i >= 0; i--) { const p = confetti[i]; p.life -= 0.016;
+        p.v.y -= 0.15; p.m.position.addScaledVector(p.v, 0.016); p.m.rotation.x += 0.2; p.m.rotation.z += 0.3;
+        if (p.life <= 0) { scene.remove(p.m); confetti.splice(i, 1); } }
+      for (let i = floaters.length - 1; i >= 0; i--) { const f = floaters[i]; f.life -= 0.016;
+        f.sp.position.y += 0.02; f.sp.material.opacity = Math.min(1, f.life);
+        if (f.life <= 0) { scene.remove(f.sp); floaters.splice(i, 1); } }
+
+      renderer.render(scene, cam);
+    }
+    loop();
+
+  </script>
+</body></html>

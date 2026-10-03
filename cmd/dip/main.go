@@ -157,11 +157,11 @@ func main() {
 	}
 
 	startUS := usdtBalance(ctx)
-	logf("DIP maker mean-reversion: budget $%.0f, offset %dbps, target +%dbps, SL -%dbps, %d pair",
+	logf("DIP maker mean-reversion: budget $%.0f, offset %dbps, target +%dbps, SL -%dbps, %d pairs",
 		envF("DIP_BUDGET", 300), envI("DIP_OFFSET_BPS", 30), envI("DIP_TARGET_BPS", 60),
 		envI("DIP_SL_BPS", 120), len(rota))
 	logf("pairs: %s", strings.Join(rota, " "))
-	logf("saldo USDT awal: %.2f", startUS)
+	logf("starting USDT balance: %.2f", startUS)
 
 	if dm := envI("DIP_DEADMAN_SEC", 30); dm > 0 {
 		go func() {
@@ -171,12 +171,12 @@ func main() {
 				time.Sleep(5 * time.Second)
 			}
 		}()
-		logf("dead-man aktif: order tak ter-refresh %ds akan dibatalkan server-side", dm)
+		logf("dead-man armed: stale orders canceled server-side after %ds", dm)
 	}
 	br = brain.New(envF("DIP_BRAIN_MIN", 40), time.Duration(envI("BRAIN_COOLDOWN_MIN", 10))*time.Minute)
 	loadStats()
 	netPnL = st.TotalNet
-	logf("otak aktif: mom-score %.0f | stats dimuat: %d siklus (%d W/%d L), net $%.4f",
+	logf("brain active: momentum score %.0f | stats loaded: %d cycles (%dW/%dL), net $%.4f",
 		envF("DIP_MOM_SCORE", 65), st.Cycles, st.Wins, st.Losses, st.TotalNet)
 
 	maxLoss := envF("DIP_MAX_LOSS", 25)
@@ -186,7 +186,7 @@ func main() {
 			break
 		}
 		if netPnL <= -maxLoss {
-			logf("cumulative net PnL %.2f <= -%.0f - berhenti (loss cap)", netPnL, maxLoss)
+			logf("cumulative net PnL %.2f <= -%.0f — stopping (loss cap)", netPnL, maxLoss)
 			break
 		}
 		cycleNo++
@@ -207,7 +207,7 @@ func main() {
 	cancelOwnOrders(sctx)
 	endUS := usdtBalance(sctx)
 	scancel()
-	logf("dip berhenti. saldo USDT akhir: %.2f (delta %.2f) | cumulative net PnL: %.4f",
+	logf("dip stopped. final USDT balance: %.2f (delta %.2f) | cumulative net PnL: %.4f",
 		endUS, endUS-startUS, netPnL)
 }
 
@@ -216,7 +216,7 @@ func main() {
 func cancelOwnOrders(ctx context.Context) {
 	open, err := client.Orders.ListOpen(ctx, nil, nil, nil, nil, false, false, nil)
 	if err != nil {
-		logf("shutdown: gagal list order terbuka (%v)", err)
+		logf("shutdown: failed to list open orders (%v)", err)
 		return
 	}
 	n := 0
@@ -229,7 +229,7 @@ func cancelOwnOrders(ctx context.Context) {
 		}
 	}
 	if n > 0 {
-		logf("shutdown: %d order sisa dibatalkan", n)
+		logf("shutdown: canceled %d leftover orders", n)
 	}
 }
 
@@ -253,16 +253,16 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 	}
 	if aerr != nil {
 		// API lambat / candle kurang: fallback perilaku dip standar.
-		lf("analyze gagal (%v) - mode dip standar", aerr)
+		lf("analyze failed (%v) — standard dip mode", aerr)
 		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
 	}
 	switch {
 	case mv.regime == strategy.RegimeTrendDown && mv.score < 55:
 		bumpSkip(symbol)
-		lf("skip: trend-down (score %.0f) - jangan gotong pisau", mv.score)
+		lf("skip: downtrend (score %.0f) — do not catch falling knives", mv.score)
 		return nil
 	case mv.regime == strategy.RegimeTrendUp && mv.volSurge && mv.score >= envF("DIP_MOM_SCORE", 65):
-		lf("MOMENTUM: regime=%s score=%.0f volSurge=%v atr=%.2f%% - entry IOC",
+		lf("MOMENTUM: regime=%s score=%.0f volSurge=%v atr=%.2f%% — IOC entry",
 			mv.regime, mv.score, mv.volSurge, mv.atrPct)
 		return runMomentumCycle(ctx, symbol, cycleNo, info)
 	default:
@@ -290,7 +290,7 @@ func runDipCycle(ctx context.Context, symbol string, cycleNo int, offBps int) er
 		entryS6 := tickAlign(midS6*(1-float64(offBps)/10000), info.TickTicks)
 		qtyS6 := budgetQty(entryS6, info)
 		if qtyS6 < info.MinQtyS6 || notional(qtyS6, entryS6, info) < info.MinNotional {
-			return fmt.Errorf("budget di bawah minimum pair")
+			return fmt.Errorf("budget below pair minimum")
 		}
 		coidBuy := fmt.Sprintf("dip-b-%d-%d-%d", time.Now().UnixNano()%1e9, cycleNo, reprices)
 		_ = jrnl.Append(jrnlEntry("buy_intent", coidBuy, map[string]string{
@@ -307,9 +307,9 @@ func runDipCycle(ctx context.Context, symbol string, cycleNo int, offBps int) er
 		reprices++
 		if reprices >= 4 {
 			bumpSkip(symbol)
-			return fmt.Errorf("harga terus lari - skip symbol")
+			return fmt.Errorf("price kept running — skip symbol")
 		}
-		lf("harga lari - reprice")
+		lf("price ran away — reprice")
 		bid, ask, err = bookTop(ctx, info)
 		if err != nil {
 			return err
@@ -339,7 +339,7 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 		"symbol": symbol, "price": f6(targetS6), "qty": f6(filledS6), "strategy": strat}))
 	lf("SELL LIMIT %s @ %s [%s]", f6(filledS6), f6(targetS6), strat)
 	if err := placeLimitSell(ctx, symbol, targetS6, filledS6, sellCoid); err != nil {
-		lf("limit sell gagal (%v) - taker exit", err)
+		lf("limit sell failed (%v) — taker exit", err)
 		return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
 	}
 
@@ -361,7 +361,7 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 				rest := filledS6 - st.cum
 				if rest >= info.MinQtyS6 {
 					sellCoid = fmt.Sprintf("%s-r%d", sellCoid, time.Now().UnixNano()%1000)
-					lf("partial %s - re-place sell sisanya (coid baru)", f6(rest))
+					lf("partial %s — re-placing remaining sell (new coid)", f6(rest))
 					_ = placeLimitSell(ctx, symbol, targetS6, rest, sellCoid)
 					continue
 				}
@@ -380,10 +380,10 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 						remaining = filledS6 - st2.cum
 					}
 					if remaining >= info.MinQtyS6 {
-						lf("SL bot-side kena (mid <= %s) - taker exit %s", f6(slPrice), f6(remaining))
+						lf("bot-side SL hit (mid <= %s) — taker exit %s", f6(slPrice), f6(remaining))
 						return takerExit(ctx, symbol, remaining, avgS6, targetS6, strat)
 					}
-					lf("SL bot-side kena, sisa %s di bawah min qty - selesai", f6(remaining))
+					lf("bot-side SL hit, remainder %s below min qty — done", f6(remaining))
 					return nil
 				}
 			}
@@ -395,7 +395,7 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 			if st2, gerr := orderSnapshot(ctx, symbol, sellCoid); gerr == nil {
 				remaining = filledS6 - st2.cum
 			}
-			lf("max hold tercapai - taker exit %s", f6(remaining))
+			lf("max hold reached — taker exit %s", f6(remaining))
 			return takerExit(ctx, symbol, remaining, avgS6, targetS6, strat)
 		}
 	}
@@ -1056,7 +1056,7 @@ func runMomentumCycle(ctx context.Context, symbol string, cycleNo int, info pair
 	entryS6 := tickAlign((bid+ask)/2, info.TickTicks)
 	qtyS6 := budgetQtyWith(entryS6, envF("DIP_MOM_BUDGET", 500), info)
 	if qtyS6 < info.MinQtyS6 || notional(qtyS6, entryS6, info) < info.MinNotional {
-		return fmt.Errorf("budget momentum di bawah minimum pair")
+		return fmt.Errorf("momentum budget below pair minimum")
 	}
 	coid := fmt.Sprintf("dip-m-%d-%d", time.Now().UnixNano()%1e9, cycleNo)
 	_ = jrnl.Append(jrnlEntry("mom_intent", coid, map[string]string{
@@ -1064,12 +1064,12 @@ func runMomentumCycle(ctx context.Context, symbol string, cycleNo int, info pair
 	filledS6, avgS6, err := placeIOCBuy(ctx, symbol, entryS6, qtyS6, coid, info)
 	if err != nil {
 		bumpSkip(symbol)
-		lf("momentum entry gagal (%v)", err)
+		lf("momentum entry failed (%v)", err)
 		return nil
 	}
 	if filledS6 == 0 {
 		bumpSkip(symbol)
-		lf("momentum tidak terisi - kemungkinan momentum palsu, lanjut")
+		lf("momentum not filled — likely a fake move, continuing")
 		return nil
 	}
 	lf("MOMENTUM FILLED %s @ %s", f6(filledS6), f6(avgS6))

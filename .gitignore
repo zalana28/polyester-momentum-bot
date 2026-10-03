@@ -5,3 +5,4 @@ bin/
 .DS_Store
 *.pyc
 __pycache__/
+.superdesign/tmp*/

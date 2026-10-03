@@ -112,10 +112,10 @@ func colorize(ev string) (string, string) {
 		return cGrn, "+"
 	case strings.Contains(ev, "MOMENTUM"):
 		return cYel, "!"
-	case strings.Contains(ev, "SL") && strings.Contains(ev, "kena"),
+	case strings.Contains(ev, "SL") && strings.Contains(ev, "hit"),
 		strings.Contains(ev, "taker exit"), strings.Contains(ev, "TAKER"):
 		return cRed, "-"
-	case strings.Contains(ev, "skip"), strings.Contains(ev, "jangan gotong"):
+	case strings.Contains(ev, "skip"), strings.Contains(ev, "falling knives"):
 		return cGray, "."
 	case strings.Contains(ev, "cycle done"):
 		if strings.Contains(ev, "net=-") {
@@ -124,7 +124,7 @@ func colorize(ev string) (string, string) {
 		return cGrn, "+"
 	case strings.Contains(ev, "SELL LIMIT"), strings.Contains(ev, "BUY LIMIT"):
 		return cCyn, "."
-	case strings.Contains(ev, "berhenti"), strings.Contains(ev, "shutdown"):
+	case strings.Contains(ev, "stopped"), strings.Contains(ev, "shutdown"):
 		return cMag, "."
 	}
 	return cGray, "."
@@ -139,7 +139,7 @@ func pad(s string, w int) string {
 	return s + strings.Repeat(" ", w-len([]rune(s)))
 }
 
-var quotesHappy = []string{"PROFIT! Sabi sabi~ ✧", "GANBATTE! Kita menang! (★^▽^★)", "Onii-chan lihat! Hijau semua!"}
+var quotesHappy = []string{"PROFIT! Nice one! ✧", "GANBATTE! We won! (★^▽^★)", "Look! All green!"}
 
 func mascot(mood string) []string {
 	switch mood {
@@ -192,19 +192,19 @@ func main() {
 		switch mood {
 		case "happy":
 			quote = quotesHappy[rand.Intn(len(quotesHappy))]
-			moodText = "PROFIT DAPAT!"
+			moodText = "PROFIT!"
 		case "sad":
-			quote = "Yadaaa... kena SL (╥﹏╥)"
-			moodText = "rugi kecil, semangat!"
+			quote = "Nooo... SL hit (╥﹏╥)"
+			moodText = "small loss, stay strong!"
 		case "fight":
-			quote = "GANBATTE! Masuk momentum!"
-			moodText = "aksi momentum!"
+			quote = "GANBATTE! Momentum entry!"
+			moodText = "momentum action!"
 		case "sleep":
-			quote = "zzz... pasar sepi..."
-			moodText = "menunggu dip..."
+			quote = "zzz... quiet market..."
+			moodText = "waiting for a dip..."
 		default:
-			quote = "Sabar... maker itu sabar~"
-			moodText = "mengintip dip..."
+			quote = "Patience... a maker waits~"
+			moodText = "hunting dips..."
 		}
 
 		var b strings.Builder

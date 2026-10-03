@@ -43,7 +43,7 @@ func kindOf(s string) string {
 		return "filled"
 	case strings.Contains(s, "SELL LIMIT"):
 		return "sell"
-	case strings.Contains(s, "SL bot-side kena"), strings.Contains(s, "taker exit"), strings.Contains(s, "TAKER EXIT"):
+	case strings.Contains(s, "bot-side SL hit"), strings.Contains(s, "taker exit"), strings.Contains(s, "TAKER EXIT"):
 		return "sl"
 	case strings.Contains(s, "jangan gotong"), strings.Contains(s, "skip"):
 		return "skip"
