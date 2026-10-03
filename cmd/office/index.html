@@ -4,12 +4,19 @@
   <title>AI Office — Trading Bot Team</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
-  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
   <style>
-    body { margin: 0; padding: 0; overflow: hidden; background: #fdfaf5; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; }
+    body { margin: 0; padding: 0; overflow: hidden; background: #1b2030; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; }
     canvas { display: block; }
     .glass-panel { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
     .font-mono-trading { font-family: 'JetBrains Mono', monospace; }
@@ -65,13 +72,40 @@
     <div id="canvas-container" class="absolute inset-0 z-0"></div>
   </div>
 
-  <script>
+  <script type="module">
+    import * as THREE from 'three';
+
     const D = document;
     const container = D.getElementById('canvas-container');
 
+    // ===================== CONFIG (tuning) =====================
+    // Skala scene (diukur dari kode): meja 5.0x2.6, karakter ~3.0 tinggi,
+    // ruang terpakai x±20 / z -13..+14, lantai 64x46.
+    const CONFIG = {
+      BG_COLOR: 0x1b2030,
+      FOG_NEAR: 70, FOG_FAR: 160,
+      LIGHT_SUN_COLOR: 0xfff1d6,
+      LIGHT_SUN_INTENSITY: 2.6,      // Directional utama (matahari dari jendela)
+      LIGHT_SUN_FROM: [28, 42, 18],  // miring kiri-atas-depan
+      LIGHT_SHADOW_BOUNDS: 26,       // menutupi ruang x±20, z -13..14
+      LIGHT_FILL_SKY: 0xfff4e0,      // hemisphere: langit hangat
+      LIGHT_FILL_GROUND: 0x3a4658,   // hemisphere: tanah biru-abu gelap
+      LIGHT_FILL_INTENSITY: 0.35,    // pengisi rendah (ambient lama dihapus)
+      LIGHT_MONITOR_COLOR: 0x6ab7ff, // glow cyan depan monitor
+      LIGHT_MONITOR_INTENSITY: 18,   // fisik decay=2 @ jarak ~2 unit
+      LIGHT_MONITOR_DISTANCE: 13,    // skala meja 5 unit
+      LIGHT_LAMP_COLOR: 0xffd9a0,    // warm glow bawah lampu gantung
+      LIGHT_LAMP_INTENSITY: 30,
+      LIGHT_LAMP_DISTANCE: 16,
+      COLOR_FLOOR: 0xd9c4b1,
+      COLOR_CARPET: 0xc4d49b,        // sage sedikit lebih pekat
+      COLOR_WALL_BACK: 0xf6f1e4,
+      COLOR_WALL_SIDE: 0xefeadd,
+    };
+
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf5f7fa);
-    scene.fog = new THREE.Fog(0xf5f7fa, 55, 150);
+    scene.background = new THREE.Color(CONFIG.BG_COLOR);
+    scene.fog = new THREE.Fog(CONFIG.BG_COLOR, CONFIG.FOG_NEAR, CONFIG.FOG_FAR);
 
     const cam = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 500);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -79,20 +113,32 @@
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.12;
+    renderer.toneMappingExposure = 1.0;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(renderer.domElement);
 
-    // Warm Daylight Lighting
-    scene.add(new THREE.AmbientLight(0xffffff, 0.42));
-    scene.add(new THREE.HemisphereLight(0xdfefff, 0xcbb79a, 0.55));
-    const keyLight = new THREE.DirectionalLight(0xfff2dd, 1.35);
-    keyLight.position.set(28, 42, 18);
-    keyLight.castShadow = true; keyLight.shadow.mapSize.set(2048,2048);
-    keyLight.shadow.camera.left = -45; keyLight.shadow.camera.right = 45;
-    keyLight.shadow.camera.top = 45; keyLight.shadow.camera.bottom = -45;
-    keyLight.shadow.camera.near = 1; keyLight.shadow.camera.far = 150;
-    keyLight.shadow.bias = -0.0004;
+    // ---- Pencahayaan (Fase 1): hemisphere pengisi + matahari + glow lokal ----
+    scene.add(new THREE.HemisphereLight(CONFIG.LIGHT_FILL_SKY, CONFIG.LIGHT_FILL_GROUND, CONFIG.LIGHT_FILL_INTENSITY));
+    const keyLight = new THREE.DirectionalLight(CONFIG.LIGHT_SUN_COLOR, CONFIG.LIGHT_SUN_INTENSITY);
+    keyLight.position.set(...CONFIG.LIGHT_SUN_FROM);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(2048, 2048);
+    const SB = CONFIG.LIGHT_SHADOW_BOUNDS;
+    keyLight.shadow.camera.left = -SB; keyLight.shadow.camera.right = SB;
+    keyLight.shadow.camera.top = SB; keyLight.shadow.camera.bottom = -SB;
+    keyLight.shadow.camera.near = 5; keyLight.shadow.camera.far = 120;
+    keyLight.shadow.bias = -0.0005; keyLight.shadow.normalBias = 0.02;
     scene.add(keyLight);
+
+    // Glow lokal — dipanggil saat meja/lampu dibuat (posisi ikut layout)
+    function addMonitorGlow(x, z) {
+      const l = new THREE.PointLight(CONFIG.LIGHT_MONITOR_COLOR, CONFIG.LIGHT_MONITOR_INTENSITY, CONFIG.LIGHT_MONITOR_DISTANCE, 2);
+      l.position.set(x, 2.4, z - 1.0); scene.add(l);
+    }
+    function addLampGlow(x, z) {
+      const l = new THREE.PointLight(CONFIG.LIGHT_LAMP_COLOR, CONFIG.LIGHT_LAMP_INTENSITY, CONFIG.LIGHT_LAMP_DISTANCE, 2);
+      l.position.set(x, 6.1, z); scene.add(l);
+    }
 
     const mat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.92, metalness: 0.02 });
 
@@ -105,16 +151,16 @@
     };
 
     // Room layout - Daylight Loft (compact, fully furnished)
-    const floor = box(64, 0.5, 46, 0xd9c4b1, 0, 0, 0); floor.castShadow = false; // Light oak floor
-    box(30, 0.22, 18, 0xccd5ae, 0, 0.26, 3.5); // Sage rug under both desk rows
+    const floor = box(64, 0.5, 46, CONFIG.COLOR_FLOOR, 0, 0, 0); floor.castShadow = false; // Light oak floor
+    box(30, 0.22, 18, CONFIG.COLOR_CARPET, 0, 0.26, 3.5); // Sage rug under both desk rows
 
     // Walls
-    box(46, 13, 0.8, 0xfaf9f6, 0, 6.5, -13); // Cream back wall
+    box(46, 13, 0.8, CONFIG.COLOR_WALL_BACK, 0, 6.5, -13); // Cream back wall
     box(9, 5, 0.1, 0xaed9e0, -9, 7, -12.5); // Pastel window L
     box(9, 5, 0.1, 0xaed9e0, 9, 7, -12.5); // Pastel window R
     box(46, 0.9, 1.2, 0xe8e2d4, 0, 12.4, -13); // Wall crown trim
-    box(0.8, 13, 46, 0xf3f0e8, -20, 6.5, -3); // Side wall L
-    box(0.8, 13, 46, 0xf3f0e8, 20, 6.5, -3); // Side wall R
+    box(0.8, 13, 46, CONFIG.COLOR_WALL_SIDE, -20, 6.5, -3); // Side wall L
+    box(0.8, 13, 46, CONFIG.COLOR_WALL_SIDE, 20, 6.5, -3); // Side wall R
 
     // Potted plants
     function plant(x, z, big) {
@@ -151,6 +197,7 @@
       const bulb = box(1.15, 0.12, 0.6, 0xffedc2, 0, 6.7, 0, g);
       bulb.material = new THREE.MeshBasicMaterial({ color: 0xffedc2 });
       g.position.set(x, 0, z); scene.add(g);
+      addLampGlow(x, z);
     }
     [-6.5, 0, 6.5].forEach(x => { lamp(x, 0.4); lamp(x, 7.9); });
 
@@ -214,7 +261,7 @@
       brain:    character( 0,   7.5, 0xffd9b0, 0xa78bfa, 'Brain Analyst'),
       boss:     character( 6.5, 7.5, 0xf2c19b, 0x475569, 'Director')
     };
-    Object.values(team).forEach(c => { desk(c.position.x, c.position.z - 1.9, 0); chair(c); });
+    Object.values(team).forEach(c => { desk(c.position.x, c.position.z - 1.9, 0); chair(c); addMonitorGlow(c.position.x, c.position.z); });
 
     // Clean White Marquee PnL Billboard
     const bbCanvas = D.createElement('canvas'); bbCanvas.width = 512; bbCanvas.height = 200;
