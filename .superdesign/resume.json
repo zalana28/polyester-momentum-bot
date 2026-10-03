@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "/": {
+      "targetKind": "existing-ui",
+      "projectId": "e266c52c-616c-44bb-ab7b-95b97ca9df28",
+      "baselineDraftId": "84244660-31df-402d-ad4f-943fe223087f",
+      "activeDraftId": "84244660-31df-402d-ad4f-943fe223087f",
+      "designSystemPath": ".superdesign/design-system.md",
+      "referenceIds": ["ce6201b6-8f93-4ca6-96ba-32ff0e8c6b8f"],
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        ".superdesign/init/theme.md",
+        "cmd/office/index.html"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "038b79f2a20f753be40449c853ea8edb0ab30e96507b8aba8e2a84ad9ac14904",
+        ".superdesign/init/theme.md": "0bd48e2a99d401f2836b0c3643aec7774ada2bc9229c1576cebc7dc84f0fc8c1",
+        "cmd/office/index.html": "38fcabecfc0a507478ea416ea7a9962ac1f50a478e1ab11b2857a9545cde65c9"
+      },
+      "components": [],
+      "drafts": {
+        "84244660-31df-402d-ad4f-943fe223087f": {
+          "title": "Current Office (Reproduction)",
+          "visualDirection": "baseline reproduction of v1",
+          "currentVersion": 1
+        },
+        "71d189ca-85d5-4e3c-9d66-dcf22b22ccd1": {
+          "title": "Neon Trading Terminal Night",
+          "visualDirection": "dark neon terminal, glass HUD",
+          "parentDraftId": "84244660-31df-402d-ad4f-943fe223087f",
+          "currentVersion": 1
+        },
+        "61b77863-e4fe-43e0-b167-fd2e08f79422": {
+          "title": "Polyester Trading Bot — Daylight Loft Studio",
+          "visualDirection": "bright pastel daylight loft",
+          "parentDraftId": "84244660-31df-402d-ad4f-943fe223087f",
+          "currentVersion": 1
+        }
+      },
+      "updatedAt": "2026-10-03T16:15:40Z"
+    }
+  }
+}
