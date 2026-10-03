@@ -179,9 +179,38 @@ func main() {
 		}
 		time.Sleep(time.Duration(envI("DIP_REST_SEC", 2)) * time.Second)
 	}
-	endUS := usdtBalance(ctx)
+	// Shutdown pakai context segar: ctx sinyal sudah canceled, jadi call API
+	// dengan ctx lama gagal (penyebab "saldo akhir 0.00" dan order yatim yang
+	// nyangkol setelah SIGINT). Semua order sendiri (prefix "dip-") dibatalkan;
+	// order pihak lain (mis. rescue-sell-) tidak disentuh.
+	sctx, scancel := context.WithTimeout(context.Background(), 45*time.Second)
+	cancelOwnOrders(sctx)
+	endUS := usdtBalance(sctx)
+	scancel()
 	logf("dip berhenti. saldo USDT akhir: %.2f (delta %.2f) | cumulative net PnL: %.4f",
 		endUS, endUS-startUS, netPnL)
+}
+
+// cancelOwnOrders membatalkan semua order terbuka dengan client_order_id
+// berprefix "dip-" — janitor untuk order yang tertinggal saat mati.
+func cancelOwnOrders(ctx context.Context) {
+	open, err := client.Orders.ListOpen(ctx, nil, nil, nil, nil, false, false, nil)
+	if err != nil {
+		logf("shutdown: gagal list order terbuka (%v)", err)
+		return
+	}
+	n := 0
+	for _, o := range open.Orders {
+		if !strings.HasPrefix(o.ClientOrderID, "dip-") {
+			continue
+		}
+		if _, err := client.Orders.Cancel(ctx, nil, models.OrderKeyByID(o.OrderID), nil, nil, nil); err == nil {
+			n++
+		}
+	}
+	if n > 0 {
+		logf("shutdown: %d order sisa dibatalkan", n)
+	}
 }
 
 // runCycle executes one buy-fill then sell-fill cycle on one symbol.
