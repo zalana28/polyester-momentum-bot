@@ -19,11 +19,13 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -33,9 +35,11 @@ import (
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 
+	"polyester-momentum-bot/internal/brain"
 	"polyester-momentum-bot/internal/journal"
 	"polyester-momentum-bot/internal/market"
 	"polyester-momentum-bot/internal/num"
+	"polyester-momentum-bot/internal/strategy"
 )
 
 type pairInfo struct {
@@ -159,6 +163,12 @@ func main() {
 	logf("pairs: %s", strings.Join(rota, " "))
 	logf("saldo USDT awal: %.2f", startUS)
 
+	br = brain.New(envF("DIP_BRAIN_MIN", 40), time.Duration(envI("BRAIN_COOLDOWN_MIN", 10))*time.Minute)
+	loadStats()
+	netPnL = st.TotalNet
+	logf("otak aktif: mom-score %.0f | stats dimuat: %d siklus (%d W/%d L), net $%.4f",
+		envF("DIP_MOM_SCORE", 65), st.Cycles, st.Wins, st.Losses, st.TotalNet)
+
 	maxLoss := envF("DIP_MAX_LOSS", 25)
 	cycleNo := 0
 	for {
@@ -170,7 +180,7 @@ func main() {
 			break
 		}
 		cycleNo++
-		sym := rota[(cycleNo-1)%len(rota)]
+		sym := pickNext(cycleNo)
 		if rerr := runCycle(ctx, sym, cycleNo); rerr != nil {
 			logf("cycle %s: %v", sym, rerr)
 		}
@@ -214,7 +224,35 @@ func cancelOwnOrders(ctx context.Context) {
 }
 
 // runCycle executes one buy-fill then sell-fill cycle on one symbol.
+// runCycle memilih mode per pair: momentum (trend-up + volume surge + skor
+// tinggi) atau dip (default). Analisis dari candle 5m via otak + regime.
 func runCycle(ctx context.Context, symbol string, cycleNo int) error {
+	info := pairs[symbol]
+	lf := func(format string, a ...any) {
+		logf("%s "+format, append([]any{symbol}, a...)...)
+	}
+	mv, aerr := analyze(ctx, symbol, info)
+	if aerr != nil {
+		// API lambat / candle kurang: fallback perilaku dip standar.
+		lf("analyze gagal (%v) - mode dip standar", aerr)
+		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
+	}
+	switch {
+	case mv.regime == strategy.RegimeTrendDown && mv.score < 55:
+		bumpSkip(symbol)
+		lf("skip: trend-down (score %.0f) - jangan gotong pisau", mv.score)
+		return nil
+	case mv.regime == strategy.RegimeTrendUp && mv.volSurge && mv.score >= envF("DIP_MOM_SCORE", 65):
+		lf("MOMENTUM: regime=%s score=%.0f volSurge=%v atr=%.2f%% - entry IOC",
+			mv.regime, mv.score, mv.volSurge, mv.atrPct)
+		return runMomentumCycle(ctx, symbol, cycleNo, info)
+	default:
+		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
+	}
+}
+
+// runDipCycle adalah mode mean-reversion asli: post-only buy di bawah mid.
+func runDipCycle(ctx context.Context, symbol string, cycleNo int, offBps int) error {
 	info := pairs[symbol]
 	lf := func(format string, a ...any) {
 		logf("%s "+format, append([]any{symbol}, a...)...)
@@ -225,13 +263,12 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		return err
 	}
 	midS6 := (bid + ask) / 2
-	offset := int64(envI("DIP_OFFSET_BPS", 30))
 	target := int64(envI("DIP_TARGET_BPS", 60))
 
 	var filledS6, avgS6 int64
 	reprices := 0
 	for {
-		entryS6 := tickAlign(midS6*(1-float64(offset)/10000), info.TickTicks)
+		entryS6 := tickAlign(midS6*(1-float64(offBps)/10000), info.TickTicks)
 		qtyS6 := budgetQty(entryS6, info)
 		if qtyS6 < info.MinQtyS6 || notional(qtyS6, entryS6, info) < info.MinNotional {
 			return fmt.Errorf("budget di bawah minimum pair")
@@ -239,7 +276,7 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		coidBuy := fmt.Sprintf("dip-b-%d-%d-%d", time.Now().UnixNano()%1e9, cycleNo, reprices)
 		_ = jrnl.Append(jrnlEntry("buy_intent", coidBuy, map[string]string{
 			"symbol": symbol, "price": f6(entryS6), "qty": f6(qtyS6)}))
-		lf("BUY LIMIT %s @ %s (offset %dbps)", f6(qtyS6), f6(entryS6), offset)
+		lf("BUY LIMIT %s @ %s (offset %dbps)", f6(qtyS6), f6(entryS6), offBps)
 
 		filledS6, avgS6, err = placeAndAwaitBuy(ctx, symbol, entryS6, qtyS6, coidBuy, info)
 		if err == nil {
@@ -250,6 +287,7 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		}
 		reprices++
 		if reprices >= 4 {
+			bumpSkip(symbol)
 			return fmt.Errorf("harga terus lari - skip symbol")
 		}
 		lf("harga lari - reprice")
@@ -263,25 +301,31 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		"symbol": symbol, "qty": f6(filledS6), "avg": f6(avgS6)}))
 	lf("FILLED %s @ %s", f6(filledS6), f6(avgS6))
 
-	// SL server-side tidak dipakai lagi: trigger SL mereserve base sehingga
-	// TP limit sell selalu kena "Insufficient funds" (terbukti live 12:42 UTC).
-	// SL dipindah ke sisi bot: cek mid tiap ~6 dtk di loop hold di bawah.
-	slID := ""
+	// SL server-side tidak dipakai (mereserve base & memblokir TP sell).
+	// SL bot-side + manajemen exit ada di holdAndExit.
 	slPrice := tickAlign(float64(avgS6)*(1-float64(envI("DIP_SL_BPS", 120))/10000), info.TickTicks)
-
 	targetS6 := tickAlign(float64(avgS6)*(1+float64(target)/10000), info.TickTicks)
-	sellCoid := fmt.Sprintf("dip-s-%d-%d", time.Now().UnixNano()%1e9, cycleNo)
+	return holdAndExit(ctx, symbol, info, filledS6, avgS6, targetS6, slPrice, "dip-maker", envI("DIP_MAX_HOLD_MIN", 45))
+}
+
+// holdAndExit memasang TP limit sell lalu mengelola posisi sampai selesai:
+// target maker, SL bot-side (cek mid tiap ~6 dtk), max-hold -> taker exit.
+// Dipakai mode dip dan momentum.
+func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, avgS6, targetS6, slPrice int64, strat string, maxHoldMin int) error {
+	lf := func(format string, a ...any) {
+		logf("%s "+format, append([]any{symbol}, a...)...)
+	}
+	sellCoid := fmt.Sprintf("dip-s-%d", time.Now().UnixNano()%1e9)
 	_ = jrnl.Append(jrnlEntry("sell_intent", sellCoid, map[string]string{
-		"symbol": symbol, "price": f6(targetS6), "qty": f6(filledS6)}))
-	lf("SELL LIMIT %s @ %s (target +%dbps)", f6(filledS6), f6(targetS6), target)
+		"symbol": symbol, "price": f6(targetS6), "qty": f6(filledS6), "strategy": strat}))
+	lf("SELL LIMIT %s @ %s [%s]", f6(filledS6), f6(targetS6), strat)
 	if err := placeLimitSell(ctx, symbol, targetS6, filledS6, sellCoid); err != nil {
 		lf("limit sell gagal (%v) - taker exit", err)
-		cancelTrigger(slID)
-		return takerExit(ctx, symbol, filledS6, avgS6, targetS6, slID)
+		return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
 	}
 
 	started := time.Now()
-	maxHold := time.Duration(envI("DIP_MAX_HOLD_MIN", 45)) * time.Minute
+	maxHold := time.Duration(maxHoldMin) * time.Minute
 	slChecked := 0
 	for {
 		if ctx.Err() != nil {
@@ -291,8 +335,7 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		st, err := orderSnapshot(ctx, symbol, sellCoid)
 		if err == nil {
 			if st.status == "filled" || st.cum >= filledS6 {
-				cancelTrigger(slID)
-				bookCycle(symbol, avgS6, filledS6, st.avg, "target", 0.001, 0.001)
+				bookCycle(symbol, strat, avgS6, filledS6, st.avg, "target", 0.001, 0.001)
 				return nil
 			}
 			if st.status == "canceled" {
@@ -303,8 +346,7 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 					_ = placeLimitSell(ctx, symbol, targetS6, rest, sellCoid)
 					continue
 				}
-				cancelTrigger(slID)
-				bookCycle(symbol, avgS6, filledS6, st.avg, "partial-done", 0.001, 0.001)
+				bookCycle(symbol, strat, avgS6, filledS6, st.avg, "partial-done", 0.001, 0.001)
 				return nil
 			}
 		}
@@ -320,7 +362,7 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 					}
 					if remaining >= info.MinQtyS6 {
 						lf("SL bot-side kena (mid <= %s) - taker exit %s", f6(slPrice), f6(remaining))
-						return takerExit(ctx, symbol, remaining, avgS6, targetS6, slID)
+						return takerExit(ctx, symbol, remaining, avgS6, targetS6, strat)
 					}
 					lf("SL bot-side kena, sisa %s di bawah min qty - selesai", f6(remaining))
 					return nil
@@ -334,9 +376,8 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 			if st2, gerr := orderSnapshot(ctx, symbol, sellCoid); gerr == nil {
 				remaining = filledS6 - st2.cum
 			}
-			cancelTrigger(slID)
 			lf("max hold tercapai - taker exit %s", f6(remaining))
-			return takerExit(ctx, symbol, remaining, avgS6, targetS6, slID)
+			return takerExit(ctx, symbol, remaining, avgS6, targetS6, strat)
 		}
 	}
 }
@@ -384,8 +425,7 @@ func avgOrEntry(entryS6, avg int64) int64 {
 	return entryS6
 }
 
-func takerExit(ctx context.Context, symbol string, qtyS6, avgS6, targetS6 int64, slID string) error {
-	cancelTrigger(slID)
+func takerExit(ctx context.Context, symbol string, qtyS6, avgS6, targetS6 int64, strat string) error {
 	info := pairs[symbol]
 	qty, _ := models.NewQtyScaled(qtyS6)
 	qty = qty.WithScale(info.BaseScale).WithSymbol(symbol)
@@ -404,7 +444,7 @@ func takerExit(ctx context.Context, symbol string, qtyS6, avgS6, targetS6 int64,
 	if gr, gerr := client.Orders.Get(ctx, nil, models.OrderKeyByClientID(coid), nil, false, false); gerr == nil && gr.Order != nil {
 		exitS6 = wireTicksToTrue6(gr.Order.AvgPx.Ticks(), info.WireShift)
 	}
-	bookCycle(symbol, avgS6, qtyS6, exitS6, "taker_exit", 0.001, 0.0015)
+	bookCycle(symbol, strat, avgS6, qtyS6, exitS6, "taker_exit", 0.001, 0.0015)
 	logf("%s TAKER EXIT %s @ %s", symbol, f6(qtyS6), f6(exitS6))
 	return nil
 }
@@ -548,7 +588,11 @@ func bookTop(ctx context.Context, info pairInfo) (float64, float64, error) {
 
 // budgetQty converts the quote budget into base qty (true6) at entry price.
 func budgetQty(entryS6 int64, info pairInfo) int64 {
-	budget := int64(envF("DIP_BUDGET", 300) * math.Pow10(int(info.QuoteScale)))
+	return budgetQtyWith(entryS6, envF("DIP_BUDGET", 300), info)
+}
+
+func budgetQtyWith(entryS6 int64, budgetF float64, info pairInfo) int64 {
+	budget := int64(budgetF * math.Pow10(int(info.QuoteScale)))
 	if entryS6 <= 0 {
 		return 0
 	}
@@ -617,7 +661,7 @@ func usdtBalance(ctx context.Context) float64 {
 }
 
 // bookCycle records one completed cycle into state-dip/trades.csv.
-func bookCycle(symbol string, entryS6, qtyS6, exitS6 int64, reason string, feeIn, feeOut float64) {
+func bookCycle(symbol, strat string, entryS6, qtyS6, exitS6 int64, reason string, feeIn, feeOut float64) {
 	info := pairs[symbol]
 	entry := float64(entryS6) / 1e6
 	exit := float64(exitS6) / 1e6
@@ -628,16 +672,34 @@ func bookCycle(symbol string, entryS6, qtyS6, exitS6 int64, reason string, feeIn
 	net := gross - fe - fx
 	netPnL += net
 
-	writeCSV(symbol, entry, qty, exit, gross, fe, fx, net, reason)
+	ps := st.PerPair[symbol]
+	ps.Fills++
+	if net >= 0 {
+		ps.Wins++
+	} else {
+		ps.Losses++
+	}
+	ps.Net += net
+	st.PerPair[symbol] = ps
+	st.TotalNet += net
+	st.Cycles++
+	if net >= 0 {
+		st.Wins++
+	} else {
+		st.Losses++
+	}
+	saveStats()
+
+	writeCSV(symbol, strat, entry, qty, exit, gross, fe, fx, net, reason)
 	jrnl.Append(jrnlEntry("cycle_done", "", map[string]string{
-		"symbol": symbol, "reason": reason, "net": fmt.Sprintf("%.4f", net)}))
-	logf("%s cycle done: qty=%.6g entry=%.6g exit=%.6g net=%.4f (total %.4f)",
-		symbol, qty, entry, exit, net, netPnL)
+		"symbol": symbol, "strategy": strat, "reason": reason, "net": fmt.Sprintf("%.4f", net)}))
+	logf("%s cycle done [%s]: qty=%.6g entry=%.6g exit=%.6g net=%.4f (total %.4f)",
+		symbol, strat, qty, entry, exit, net, netPnL)
 }
 
 var csvMu = make(chan struct{}, 1)
 
-func writeCSV(symbol string, entry, qty, exit, gross, fe, fx, net float64, reason string) {
+func writeCSV(symbol, strat string, entry, qty, exit, gross, fe, fx, net float64, reason string) {
 	csvMu <- struct{}{}
 	defer func() { <-csvMu }()
 	path := "state-dip/trades.csv"
@@ -655,7 +717,7 @@ func writeCSV(symbol string, entry, qty, exit, gross, fe, fx, net float64, reaso
 		w.Write([]string{"ts_close", "symbol", "strategy", "entry", "qty", "exit",
 			"gross_usdt", "fee_entry_usdt", "fee_exit_usdt", "net_usdt", "exit_reason"})
 	}
-	w.Write([]string{time.Now().UTC().Format(time.RFC3339), symbol, "dip-maker",
+	w.Write([]string{time.Now().UTC().Format(time.RFC3339), symbol, strat,
 		fmt.Sprintf("%.8g", entry), fmt.Sprintf("%.8g", qty), fmt.Sprintf("%.8g", exit),
 		fmt.Sprintf("%.4f", gross), fmt.Sprintf("%.4f", fe), fmt.Sprintf("%.4f", fx),
 		fmt.Sprintf("%.4f", net), reason})
@@ -775,4 +837,237 @@ func ledgerID(pair map[string]any, symbol string, base bool) uint32 {
 		return *id
 	}
 	return 0
+}
+
+// ===================== upgrade: otak, regime, momentum, stats =====================
+
+var (
+	br          *brain.Brain
+	regimeCache = map[string]regimeEntry{}
+	st          dipStats
+)
+
+type regimeEntry struct {
+	r  strategy.Regime
+	at time.Time
+}
+
+type pairStat struct {
+	Fills  int     `json:"fills"`
+	Skips  int     `json:"skips"`
+	Wins   int     `json:"wins"`
+	Losses int     `json:"losses"`
+	Net    float64 `json:"net"`
+}
+
+type dipStats struct {
+	TotalNet float64             `json:"total_net"`
+	Cycles   int                 `json:"cycles"`
+	Wins     int                 `json:"wins"`
+	Losses   int                 `json:"losses"`
+	PerPair  map[string]pairStat `json:"per_pair"`
+}
+
+// loadStats memuat statistik lintas-restart; netPnL lanjut dari situ.
+func loadStats() {
+	st.PerPair = map[string]pairStat{}
+	raw, err := os.ReadFile("state-dip/stats.json")
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(raw, &st)
+	if st.PerPair == nil {
+		st.PerPair = map[string]pairStat{}
+	}
+}
+
+func saveStats() {
+	raw, err := json.MarshalIndent(st, "", " ")
+	if err != nil {
+		return
+	}
+	tmp := "state-dip/stats.json.tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, "state-dip/stats.json")
+}
+
+func bumpSkip(symbol string) {
+	ps := st.PerPair[symbol]
+	ps.Skips++
+	st.PerPair[symbol] = ps
+	saveStats()
+}
+
+// mktView adalah ringkasan kondisi pasar satu pair dari candle 5m.
+type mktView struct {
+	regime   strategy.Regime
+	score    float64
+	volSurge bool
+	atrPct   float64
+}
+
+// analyze menarik 120 candle 5m dan menghitung regime (Efficiency Ratio),
+// skor otak (drift/RSI/volume/breakout/ROC/chop), lonjakan volume candle
+// terakhir, dan ATR14 dalam persen.
+func analyze(ctx context.Context, symbol string, info pairInfo) (mktView, error) {
+	res, err := client.MarketData.GetCandles(ctx, &symbol, nil, "5m", 120, nil, nil, false)
+	if err != nil {
+		return mktView{}, err
+	}
+	div := math.Pow10(int(info.WireShift))
+	var sc []strategy.Candle
+	var bc []brain.Candle
+	var closes, vols []float64
+	for _, c := range res.Candles {
+		if c.Close == "" {
+			continue
+		}
+		cl, e1 := strconv.ParseFloat(c.Close, 64)
+		hi, e2 := strconv.ParseFloat(c.High, 64)
+		lo, e3 := strconv.ParseFloat(c.Low, 64)
+		if e1 != nil || e2 != nil || e3 != nil {
+			continue
+		}
+		cl, hi, lo = cl/div, hi/div, lo/div
+		vol := 0.0
+		if c.Volume != "" {
+			vol, _ = strconv.ParseFloat(c.Volume, 64)
+		}
+		sc = append(sc, strategy.Candle{TsSec: c.TsSec, High: hi, Low: lo, Close: cl, Volume: vol})
+		bc = append(bc, brain.Candle{TsSec: c.TsSec, High: hi, Low: lo, Close: cl, Volume: vol})
+		closes = append(closes, cl)
+		vols = append(vols, vol)
+	}
+	n := len(sc)
+	if n < 30 {
+		return mktView{}, fmt.Errorf("candle kurang: %d", n)
+	}
+	mv := mktView{regime: strategy.ClassifyRegime(sc, 5, 15)}
+	regimeCache[symbol] = regimeEntry{mv.regime, time.Now()}
+	ef := emaSeries(closes, 5)
+	es := emaSeries(closes, 15)
+	v := br.Evaluate(symbol, bc, ef > es, ef, es)
+	mv.score = v.Score
+	if n >= 21 {
+		mean := 0.0
+		for _, x := range vols[n-21 : n-1] {
+			mean += x
+		}
+		mean /= 20
+		mv.volSurge = mean > 0 && vols[n-1] >= 1.5*mean
+	}
+	if n >= 15 {
+		trSum := 0.0
+		for i := n - 14; i < n; i++ {
+			tr := sc[i].High - sc[i].Low
+			if i > 0 {
+				tr = math.Max(tr, math.Abs(sc[i].High-sc[i-1].Close))
+				tr = math.Max(tr, math.Abs(sc[i].Low-sc[i-1].Close))
+			}
+			trSum += tr
+		}
+		mv.atrPct = trSum / 14 / closes[n-1] * 100
+	}
+	return mv, nil
+}
+
+func emaSeries(xs []float64, period int) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	k := 2.0 / float64(period+1)
+	e := xs[0]
+	for _, x := range xs[1:] {
+		e = x*k + e*(1-k)
+	}
+	return e
+}
+
+// pickNext memilih pair berikutnya: choppy/range didahulukan (sana dip sering
+// muncul), trend-up menengah (kandidat momentum), trend-down paling akhir.
+func pickNext(cycleNo int) string {
+	rank := func(s string) int {
+		re, ok := regimeCache[s]
+		if !ok || time.Since(re.at) > 10*time.Minute {
+			return 1 // belum dianalisis: posisi tengah
+		}
+		switch re.r {
+		case strategy.RegimeChoppy, strategy.RegimeRange:
+			return 0
+		case strategy.RegimeTrendUp:
+			return 1
+		default:
+			return 2
+		}
+	}
+	ord := append([]string(nil), rota...)
+	sort.SliceStable(ord, func(i, j int) bool { return rank(ord[i]) < rank(ord[j]) })
+	return ord[(cycleNo-1)%len(ord)]
+}
+
+// runMomentumCycle: trend-up + volume surge + skor otak tinggi -> beli
+// SEKARANG memakai limit-IOC di harga ask (market yang dicap harga, jadi
+// slippage maksimal nol tick), lalu exit target maker + SL bot-side +
+// max-hold pendek. Ukuran posisi lebih kecil dari mode dip.
+func runMomentumCycle(ctx context.Context, symbol string, cycleNo int, info pairInfo) error {
+	lf := func(format string, a ...any) {
+		logf("%s "+format, append([]any{symbol}, a...)...)
+	}
+	bid, ask, err := bookTop(ctx, info)
+	if err != nil {
+		return err
+	}
+	entryS6 := tickAlign((bid+ask)/2, info.TickTicks)
+	qtyS6 := budgetQtyWith(entryS6, envF("DIP_MOM_BUDGET", 500), info)
+	if qtyS6 < info.MinQtyS6 || notional(qtyS6, entryS6, info) < info.MinNotional {
+		return fmt.Errorf("budget momentum di bawah minimum pair")
+	}
+	coid := fmt.Sprintf("dip-m-%d-%d", time.Now().UnixNano()%1e9, cycleNo)
+	_ = jrnl.Append(jrnlEntry("mom_intent", coid, map[string]string{
+		"symbol": symbol, "price": f6(entryS6), "qty": f6(qtyS6)}))
+	filledS6, avgS6, err := placeIOCBuy(ctx, symbol, entryS6, qtyS6, coid, info)
+	if err != nil {
+		bumpSkip(symbol)
+		lf("momentum entry gagal (%v)", err)
+		return nil
+	}
+	if filledS6 == 0 {
+		bumpSkip(symbol)
+		lf("momentum tidak terisi - kemungkinan momentum palsu, lanjut")
+		return nil
+	}
+	lf("MOMENTUM FILLED %s @ %s", f6(filledS6), f6(avgS6))
+	targetS6 := tickAlign(float64(avgS6)*(1+float64(envI("DIP_MOM_TARGET_BPS", 60))/10000), info.TickTicks)
+	slPrice := tickAlign(float64(avgS6)*(1-float64(envI("DIP_SL_BPS", 120))/10000), info.TickTicks)
+	return holdAndExit(ctx, symbol, info, filledS6, avgS6, targetS6, slPrice, "dip-momentum", envI("DIP_MOM_MAX_HOLD_MIN", 20))
+}
+
+// placeIOCBuy memasang limit-IOC buy di harga ask: langsung cross seperti
+// market tapi tercap harga — tidak ada slippage di luar harga terpasang.
+func placeIOCBuy(ctx context.Context, symbol string, priceS6, qtyS6 int64, coid string, info pairInfo) (int64, int64, error) {
+	wire := priceS6 * int64(math.Pow10(int(info.WireShift)))
+	pr := models.PriceFromTicksInt(wire)
+	qty, _ := models.NewQtyScaled(qtyS6)
+	qty = qty.WithScale(info.BaseScale).WithSymbol(symbol)
+	tif := "ioc"
+	if _, err := client.Orders.Create(ctx, models.CreateOrderRequest{
+		Symbol:        &symbol,
+		Side:          "buy",
+		OrderType:     "limit",
+		TIF:           &tif,
+		Price:         &pr,
+		Qty:           models.QtyFromScaled(qty),
+		FeeAsset:      strPtr("quote"),
+		ClientOrderID: &coid,
+	}, nil); err != nil {
+		return 0, 0, err
+	}
+	time.Sleep(300 * time.Millisecond)
+	st, err := orderSnapshot(ctx, symbol, coid)
+	if err != nil {
+		return 0, 0, err
+	}
+	return st.cum, avgOrEntry(priceS6, st.avg), nil
 }
