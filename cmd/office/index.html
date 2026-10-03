@@ -88,6 +88,15 @@
 
   <script type="module">
     import * as THREE from 'three';
+    window.addEventListener('error', e => {
+      if (!window.__officeErrorShown) {
+        window.__officeErrorShown = true;
+        const d = document.createElement('div');
+        d.style.cssText = 'position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#7f1d1d;color:#fff;font:600 13px monospace;padding:8px 14px;border-radius:10px;z-index:99;max-width:80vw;';
+        d.textContent = 'OFFICE ERROR: ' + e.message;
+        document.body.appendChild(d);
+      }
+    });
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
     import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -566,18 +575,6 @@
       c.userData.label = { el: div, obj: lo };
     });
 
-    // Ring status per agent (geometri bersama, material per agent)
-    DESK_LAYOUT.forEach(d => {
-      const a = team[d.id];
-      const m = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x64748b, emissiveIntensity: 0.9, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
-      glowRegistry.push({ label: 'ring-' + d.id, mat: m });
-      const ring = new THREE.Mesh(ringGeoShared, m);
-      ring.rotation.x = -Math.PI / 2; ring.renderOrder = 20;
-      const cp = a.userData.chair.position;
-      ring.position.set(cp.x, ringY(cp.x, cp.z), cp.z);
-      scene.add(ring);
-      agentStates[d.id] = { state: 'idle', until: 0, text: '', ring, ringMat: m, screen: a.userData.screen, screenOrig: a.userData.screenOrig };
-    });
 
     // ---- State machine (Fase 5b): idle | thinking | acting | alert ----
     const STATE_PRIO = { idle: 0, thinking: 1, acting: 2, alert: 3 };
@@ -651,6 +648,18 @@
       seq.forEach(([ms, f]) => demoTimers.push(setTimeout(f, ms)));
     }
     function stopDemo() { demoTimers.forEach(clearTimeout); demoTimers = []; Object.keys(team).forEach(id => setAgentState(id, 'idle')); }
+    // Ring status per agent (geometri bersama, material per agent)
+    DESK_LAYOUT.forEach(d => {
+      const a = team[d.id];
+      const m = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x64748b, emissiveIntensity: 0.9, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
+      glowRegistry.push({ label: 'ring-' + d.id, mat: m });
+      const ring = new THREE.Mesh(ringGeoShared, m);
+      ring.rotation.x = -Math.PI / 2; ring.renderOrder = 20;
+      const cp = a.userData.chair.position;
+      ring.position.set(cp.x, ringY(cp.x, cp.z), cp.z);
+      scene.add(ring);
+      agentStates[d.id] = { state: 'idle', until: 0, text: '', ring, ringMat: m, screen: a.userData.screen, screenOrig: a.userData.screenOrig };
+    });
 
     // ---- Bubble CSS2D (API; disambungkan ke state machine di 5b) ----
     const bubbleAgents = {};
