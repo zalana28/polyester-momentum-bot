@@ -261,17 +261,22 @@
       box(0.3, h+0.55, 0.2, 0xe8e2d4, w/2+0.12, 0, 0.05, g);
       g.position.set(cx, cy, -12.45); scene.add(g);
     }
-    skylineWindow(-6, 7.4, 12, 5.6);
+    skylineWindow(-10, 7.4, 10, 5.6);
 
-    // wallScreen placeholder (isi nyata di Fase 7) — sisi kepala meja, kanan-atas
+    // wallScreen (Fase 7a): canvas 1024x576 -> CanvasTexture, toneMapped false
+    // (teks tajam & tidak kena bloom); tengah atas baris dalam — bebas panel HUD
+    const wsCanvas = D.createElement('canvas'); wsCanvas.width = 1024; wsCanvas.height = 576;
+    const wsTex = new THREE.CanvasTexture(wsCanvas);
+    wsTex.colorSpace = THREE.SRGBColorSpace;
+    wsTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    wsTex.minFilter = THREE.LinearMipmapLinearFilter; wsTex.generateMipmaps = true;
+    const wsMat = new THREE.MeshBasicMaterial({ map: wsTex, toneMapped: false });
     const wallScreenGroup = new THREE.Group();
-    box(9.6, 4.8, 0.18, 0x232a3d, 0, 0, 0, wallScreenGroup); // bingkai
-    const wsMat = new THREE.MeshStandardMaterial({ color: 0x05070d, emissive: 0x9db8ff, emissiveIntensity: 0.45 });
-    glowRegistry.push({ label: 'wallScreen-placeholder', mat: wsMat });
-    const wsPlane = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 4.2), wsMat);
+    box(9.7, 5.15, 0.18, 0x232a3d, 0, 0, 0, wallScreenGroup); // bingkai
+    const wsPlane = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 5.06), wsMat);
     wsPlane.position.z = 0.11; wsPlane.name = 'wallScreen';
     wallScreenGroup.add(wsPlane);
-    wallScreenGroup.position.set(8.6, 8.3, -12.35); scene.add(wallScreenGroup);
+    wallScreenGroup.position.set(0, 8.3, -12.35); scene.add(wallScreenGroup);
 
     // Whiteboard dinding kiri (menghadap +x) dengan grafik zigzag — z=+3 bebas
     // dari proyeksi billboard sprite
@@ -731,33 +736,7 @@
       setTimeout(() => { b.o.removeFromParent(); b.el.remove(); }, CONFIG.BUBBLE_FADE_MS + 30);
     }
 
-    // Clean White Marquee PnL Billboard
-    const bbCanvas = D.createElement('canvas'); bbCanvas.width = 512; bbCanvas.height = 200;
-    const bbTex = new THREE.CanvasTexture(bbCanvas);
-    const billboard = new THREE.Sprite(new THREE.SpriteMaterial({ map: bbTex, transparent: true }));
-    billboard.scale.set(12, 4.7, 1);
-    billboard.position.set(-15.5, 8, -6); // sementara: kiri ruangan, tidak menumpuk wallScreen
-    billboard.material.depthTest = false;
-    billboard.renderOrder = 50;
-    scene.add(billboard);
-
-    function drawBillboard(pnl, cy, w, l) {
-      const c = bbCanvas.getContext('2d');
-      c.clearRect(0, 0, 512, 200);
-      c.fillStyle = '#ffffff';
-      c.beginPath(); c.roundRect(10, 10, 492, 180, 24); c.fill();
-      c.shadowBlur = 10; c.shadowColor = 'rgba(0,0,0,0.1)';
-      c.strokeStyle = '#e2e8f0'; c.lineWidth = 2; c.stroke();
-      c.shadowBlur = 0;
-      c.fillStyle = '#64748b'; c.font = 'bold 30px "Plus Jakarta Sans"'; c.textAlign = 'center';
-      c.fillText('STRATEGY PERFORMANCE', 256, 60);
-      c.fillStyle = pnl >= 0 ? '#10b981' : '#ef4444'; c.font = 'bold 76px "JetBrains Mono"';
-      c.fillText((pnl >= 0 ? '+' : '') + pnl.toFixed(2), 256, 140);
-      c.fillStyle = '#94a3b8'; c.font = '24px "Plus Jakarta Sans"';
-      c.fillText(cy + ' cycles · ' + w + ' wins · ' + l + ' losses', 256, 175);
-      bbTex.needsUpdate = true;
-    }
-    drawBillboard(0.00, 0, 0, 0);
+    // Billboard sprite PnL lama DIHAPUS (Fase 7a) — diganti wallScreen canvas
 
 
     // ---- LIVE DATA LAYER (real bot events) ----
@@ -791,6 +770,82 @@
       if(kind==='sl')who.userData.faint=2.2;
       if(kind==='momentum')who.userData.run=2.5;
     }
+    // ---- wallScreen PnL (Fase 7a): redraw hanya saat data berubah ----
+    let wsFlashRemaining = 0;
+    let wsData = { total_net: 0, cycles: 0, wins: 0, losses: 0, trades: [], _up: true };
+    let wsSig = '';
+    let wsCurveHist = [];
+    function buildCurve(d) {
+      const nets = (d.trades || []).map(t => typeof t === 'number' ? t : (parseFloat(String(t).split(',')[9]) || 0));
+      if (!nets.length) {
+        const pts = wsCurveHist.length ? wsCurveHist.slice() : [d.total_net];
+        return { pts, base: d.total_net };
+      }
+      let base = d.total_net - nets.reduce((a, b) => a + b, 0);
+      const pts = [base]; let e = base;
+      nets.forEach(n => { e += n; pts.push(e); });
+      return { pts, base };
+    }
+    function drawWallScreen() {
+      const c = wsCanvas.getContext('2d');
+      const d = wsData;
+      const flashing = wsFlashRemaining > 0;
+      c.fillStyle = '#0b1020'; c.fillRect(0, 0, 1024, 576);
+      c.strokeStyle = flashing ? (d._up ? '#35e08d' : '#ff5d6c') : '#2b4a6b';
+      c.lineWidth = 10; c.strokeRect(5, 5, 1014, 566);
+      c.textAlign = 'center';
+      c.fillStyle = '#9fc3ff'; c.font = 'bold 44px "Plus Jakarta Sans", sans-serif';
+      c.fillText('STRATEGY PERFORMANCE', 512, 78);
+      const up = d.total_net >= 0;
+      c.fillStyle = up ? '#35e08d' : '#ff5d6c';
+      c.font = 'bold 170px "JetBrains Mono", monospace';
+      c.fillText((up ? '+' : '') + d.total_net.toFixed(2), 512, 258);
+      c.fillStyle = '#b8c6e8'; c.font = 'bold 40px "Plus Jakarta Sans", sans-serif';
+      c.fillText(d.cycles + ' cycles  ·  ' + d.wins + ' wins  ·  ' + d.losses + ' losses', 512, 316);
+      const curve = buildCurve(d);
+      const pts = curve.pts;
+      const x0 = 150, x1 = 960, y0 = 356, y1 = 524;
+      c.strokeStyle = '#22314f'; c.lineWidth = 2; c.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      if (pts.length >= 2) {
+        let mn = Math.min(...pts), mx = Math.max(...pts);
+        if (mx - mn < 0.01) { mx = mn + 0.5; mn -= 0.5; }
+        const X = i => x0 + (x1 - x0) * (i / (pts.length - 1));
+        const Y = v => y1 - (y1 - y0) * ((v - mn) / (mx - mn));
+        c.beginPath();
+        pts.forEach((v, i) => { i ? c.lineTo(X(i), Y(v)) : c.moveTo(X(i), Y(v)); });
+        c.lineWidth = 6; c.strokeStyle = pts[pts.length - 1] >= pts[0] ? '#35e08d' : '#ff5d6c';
+        c.stroke();
+        c.fillStyle = '#8ba2c8'; c.font = 'bold 36px "JetBrains Mono", monospace'; c.textAlign = 'left';
+        c.fillText('max ' + mx.toFixed(2), x0 + 10, y0 + 42);
+        c.fillText('min ' + mn.toFixed(2), x0 + 10, y1 - 12);
+      } else {
+        c.fillStyle = '#5b6c94'; c.font = 'bold 36px "Plus Jakarta Sans", sans-serif'; c.textAlign = 'center';
+        c.fillText('equity curve menunggu trade...', (x0 + x1) / 2, (y0 + y1) / 2 + 12);
+      }
+      if (flashing) {
+        c.fillStyle = (d._up ? 'rgba(53,224,141,' : 'rgba(255,93,108,') + Math.min(0.14, wsFlashRemaining * 0.3).toFixed(3) + ')';
+        c.fillRect(0, 0, 1024, 576);
+      }
+      c.textAlign = 'start';
+      wsTex.needsUpdate = true;
+    }
+    function updateWallScreen(s2) {
+      const curve = buildCurve(s2);
+      const sig = JSON.stringify([s2.total_net, s2.cycles, s2.wins, s2.losses, curve.pts]);
+      if (sig === wsSig) return;
+      if (wsSig !== '' && s2.total_net !== wsData.total_net) {
+        wsData._up = s2.total_net > wsData.total_net;
+        wsFlashRemaining = 0.6;
+      }
+      const prev = wsData.total_net;
+      wsData = { total_net: s2.total_net, cycles: s2.cycles, wins: s2.wins, losses: s2.losses, trades: s2.trades || [], _up: wsData._up };
+      if (s2.total_net !== prev) { wsCurveHist.push(s2.total_net); if (wsCurveHist.length > 120) wsCurveHist.shift(); }
+      wsSig = sig;
+      drawWallScreen();
+    }
+    function setPnl(value) { wsData.total_net = value; updateWallScreen(wsData); }
+    function pushPnl(arr) { wsData.trades = arr; updateWallScreen(wsData); }
+
     let lastEvKey='';
     async function poll(){
       try{
@@ -799,7 +854,7 @@
         pnlEl.textContent=(s.total_net>=0?'+':'')+s.total_net.toFixed(2)+' USD';
         pnlEl.style.color=s.total_net>=0?'#10b981':'#ef4444';
         D.getElementById('wl-text').textContent=s.cycles+' cycles · ✓'+s.wins+' ✗'+s.losses;
-        drawBillboard(s.total_net,s.cycles,s.wins,s.losses);
+        updateWallScreen(s);
         const list=D.getElementById('feed-list');list.innerHTML='';
         (s.events||[]).slice(0,8).forEach(e=>{
           const d=D.createElement('div');d.className='fitem';
@@ -1034,6 +1089,7 @@
           if (fl.life <= 0) { scene.remove(fl.sp); floaters.splice(i, 1); } }
         updateCameraRig(dt);
       }
+      if (wsFlashRemaining > 0) { wsFlashRemaining -= dt; if (wsFlashRemaining <= 0) drawWallScreen(); }
       if (CONFIG.ENABLE_POSTFX && composer) composer.render();
       else renderer.render(scene, cam);
       labelRenderer.render(scene, cam);
@@ -1159,7 +1215,7 @@
       const cams = sweepCameras(); const names = ['CAMERA_START', 'SWEEP kanan +25°', 'SWEEP kiri -25°'];
       const rows = [];
       const items = DESK_LAYOUT.map(d => ({ label: 'monitor-' + d.id, pos: team[d.id].userData.desk.position, normal: new THREE.Vector3(Math.sin(d.ry), 0, Math.cos(d.ry)) }));
-      items.push({ label: 'wallScreen', pos: new THREE.Vector3(8.6, 8.3, -12.35), normal: new THREE.Vector3(0, 0, 1) });
+      items.push({ label: 'wallScreen', pos: new THREE.Vector3(0, 8.3, -12.35), normal: new THREE.Vector3(0, 0, 1) });
       items.forEach(it => cams.forEach((cp, ci) => {
         const toCam = new THREE.Vector3(cp[0] - it.pos.x, cp[1] - it.pos.y, cp[2] - it.pos.z).normalize();
         const dot = it.normal.dot(toCam);
@@ -1215,7 +1271,7 @@
       if (!rows.length) rows.push({ kamera: 'SEMUA', konflik: 'BERSIH', a: '-', b: '-' });
       console.table(rows); return rows;
     }
-    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react, setAgentState, getStates, debugDemo, stopDemo, setPostfx, togglePass, bloomProbe, monitorVisibility, fpsReport, labelOverlap };
+    if (CONFIG.DEBUG) window.__office = { focusOnAgent, team, CONFIG, faceAngles, checkOcclusion, sweepCameras, faceStats, setWorking, pauseAnim, showBubble, hideBubble, setLabelActive, react, setAgentState, getStates, debugDemo, stopDemo, setPostfx, togglePass, bloomProbe, monitorVisibility, fpsReport, labelOverlap, setPnl, pushPnl };
 
   </script>
 </body></html>
