@@ -163,6 +163,16 @@ func main() {
 	logf("pairs: %s", strings.Join(rota, " "))
 	logf("saldo USDT awal: %.2f", startUS)
 
+	if dm := envI("DIP_DEADMAN_SEC", 30); dm > 0 {
+		go func() {
+			for {
+				rid := fmt.Sprintf("dm-%d", time.Now().UnixNano()%1e9)
+				_, _ = client.Orders.CancelAllAfter(context.Background(), nil, dm, nil, nil, nil, &rid)
+				time.Sleep(5 * time.Second)
+			}
+		}()
+		logf("dead-man aktif: order tak ter-refresh %ds akan dibatalkan server-side", dm)
+	}
 	br = brain.New(envF("DIP_BRAIN_MIN", 40), time.Duration(envI("BRAIN_COOLDOWN_MIN", 10))*time.Minute)
 	loadStats()
 	netPnL = st.TotalNet
@@ -231,7 +241,16 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 	lf := func(format string, a ...any) {
 		logf("%s "+format, append([]any{symbol}, a...)...)
 	}
-	mv, aerr := analyze(ctx, symbol, info)
+	var mv mktView
+	var aerr error
+	if re, ok := viewCache[symbol]; ok && time.Since(re.at) < 2*time.Minute {
+		mv = re.v
+	} else {
+		mv, aerr = analyze(ctx, symbol, info)
+	}
+	if aerr == nil {
+		viewCache[symbol] = viewEntry{mv, time.Now()}
+	}
 	if aerr != nil {
 		// API lambat / candle kurang: fallback perilaku dip standar.
 		lf("analyze gagal (%v) - mode dip standar", aerr)
@@ -548,7 +567,16 @@ func orderSnapshot(ctx context.Context, symbol, coid string) (orderSnap, error) 
 }
 
 func cancelOrder(ctx context.Context, symbol, coid string) {
-	_, _ = client.Orders.Cancel(ctx, nil, models.OrderKeyByClientID(coid), &symbol, nil, nil)
+	if err := cancelOrderOnce(ctx, symbol, coid); err != nil {
+		fctx, fc := context.WithTimeout(context.Background(), 10*time.Second)
+		defer fc()
+		_ = cancelOrderOnce(fctx, symbol, coid)
+	}
+}
+
+func cancelOrderOnce(ctx context.Context, symbol, coid string) error {
+	_, err := client.Orders.Cancel(ctx, nil, models.OrderKeyByClientID(coid), &symbol, nil, nil)
+	return err
 }
 
 func armStopLoss(ctx context.Context, symbol string, slPriceS6, qtyS6 int64, coid string, info pairInfo) (string, error) {
@@ -844,8 +872,14 @@ func ledgerID(pair map[string]any, symbol string, base bool) uint32 {
 var (
 	br          *brain.Brain
 	regimeCache = map[string]regimeEntry{}
+	viewCache   = map[string]viewEntry{}
 	st          dipStats
 )
+
+type viewEntry struct {
+	v  mktView
+	at time.Time
+}
 
 type regimeEntry struct {
 	r  strategy.Regime
