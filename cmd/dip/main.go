@@ -341,93 +341,67 @@ func runDipCycle(ctx context.Context, symbol string, cycleNo int, offBps int) er
 	return holdAndExit(ctx, symbol, info, filledS6, avgS6, targetS6, slPrice, "dip-maker", envI("DIP_MAX_HOLD_MIN", 45))
 }
 
-// holdAndExit memasang TP limit sell lalu mengelola posisi sampai selesai:
-// target maker, SL bot-side (cek mid tiap ~6 dtk), max-hold -> taker exit.
-// Dipakai mode dip dan momentum.
+// holdAndExit: SL server-side (trigger exchange — melindungi walau bot
+// mati/tidur/API mati; pelajaran 2 insiden) + TP dipantau bot dari mid
+// (market exit saat target kena). trade tetap dibooking via takerExit.
 func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, avgS6, targetS6, slPrice int64, strat string, maxHoldMin int) error {
 	lf := func(format string, a ...any) {
 		logf("%s "+format, append([]any{symbol}, a...)...)
 	}
-	sellCoid := fmt.Sprintf("dip-s-%d", time.Now().UnixNano()%1e9)
-	_ = jrnl.Append(jrnlEntry("sell_intent", sellCoid, map[string]string{
-		"symbol": symbol, "price": f6(targetS6), "qty": f6(filledS6), "strategy": strat}))
-	lf("SELL LIMIT %s @ %s [%s]", f6(filledS6), f6(targetS6), strat)
-	if err := placeLimitSell(ctx, symbol, targetS6, filledS6, sellCoid); err != nil {
-		lf("limit sell failed (%v) — taker exit", err)
-		return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
+	slCoid := fmt.Sprintf("dip-sl-%d", time.Now().UnixNano()%1e9)
+	slID, err := armStopLoss(ctx, symbol, slPrice, filledS6, slCoid, info)
+	if err != nil {
+		lf("WARNING SL server gagal (%v) — watchdog bot jadi lapisan satu-satunya", err)
+	} else {
+		lf("SL server-side armed @ %s [%s]", f6(slPrice), strat)
 	}
+	_ = jrnl.Append(jrnlEntry("sl_intent", slCoid, map[string]string{
+		"symbol": symbol, "price": f6(slPrice), "qty": f6(filledS6), "strategy": strat}))
 
 	started := time.Now()
 	maxHold := time.Duration(maxHoldMin) * time.Minute
-	slChecked := 0
-	lastSlErrLog := 0
+	liveI := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		time.Sleep(2 * time.Second)
-		st, err := orderSnapshot(ctx, symbol, sellCoid)
-		if err == nil {
-			if st.status == "filled" || st.cum >= filledS6 {
-				bookCycle(symbol, strat, avgS6, filledS6, st.avg, "target", 0.001, 0.001)
-				return nil
-			}
-			if st.status == "canceled" {
-				rest := filledS6 - st.cum
-				if rest >= info.MinQtyS6 {
-					sellCoid = fmt.Sprintf("%s-r%d", sellCoid, time.Now().UnixNano()%1000)
-					lf("partial %s — re-placing remaining sell (new coid)", f6(rest))
-					_ = placeLimitSell(ctx, symbol, targetS6, rest, sellCoid)
-					continue
-				}
-				bookCycle(symbol, strat, avgS6, filledS6, st.avg, "partial-done", 0.001, 0.001)
-				return nil
-			}
-		}
-		slChecked++
-		if slChecked%2 == 0 { // cek tiap ~4 dtk
+		liveI++
+		if liveI%2 == 0 {
 			b2, a2, berr := bookTop(ctx, info)
-			if berr != nil { // API lemot: satu retry dgn context segar
+			if berr != nil {
 				fctx, fc := context.WithTimeout(context.Background(), 5*time.Second)
 				b2, a2, berr = bookTop(fctx, info)
 				fc()
 			}
 			if berr != nil {
-				if slChecked-lastSlErrLog > 15 { // log maksimal tiap ~30 dtk
-					lf("SL check gagal (%v) — watchdog buta sementara", berr)
-					lastSlErrLog = slChecked
-				}
-			} else {
-				lastSlErrLog = 0
-				writeLive("HOLD", symbol, map[string]any{
-					"entry": float64(avgS6) / 1e6, "mid": (b2 + a2) / 2 / 1e6,
-					"target": float64(targetS6) / 1e6, "sl": float64(slPrice) / 1e6,
-					"qty": float64(filledS6) / math.Pow10(int(info.BaseScale))})
+				continue
+			}
+			mid := (b2 + a2) / 2
+			writeLive("HOLD", symbol, map[string]any{
+				"entry": float64(avgS6) / 1e6, "mid": mid / 1e6,
+				"target": float64(targetS6) / 1e6, "sl": float64(slPrice) / 1e6,
+				"qty": float64(filledS6) / math.Pow10(int(info.BaseScale))})
+			if mid >= float64(targetS6)/1e6 {
+				lf("TP kena (mid >= %s) — market exit", f6(targetS6))
+				cancelTrigger(slID)
+				return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
+			}
+		}
+		// SL server-side melindungi; kalau trigger gagal dipasang, watchdog bot
+		// mengambil alih (bookTop bisa stale — lapisan kedua saja)
+		if slID == "" {
+			if b2, a2, berr := bookTop(ctx, info); berr == nil {
 				if (b2+a2)/2 <= float64(slPrice)/1e6 {
-					cancelOrder(ctx, symbol, sellCoid)
-					time.Sleep(400 * time.Millisecond)
-					remaining := filledS6
-					if st2, gerr := orderSnapshot(ctx, symbol, sellCoid); gerr == nil {
-						remaining = filledS6 - st2.cum
-					}
-					if remaining >= info.MinQtyS6 {
-						lf("bot-side SL hit (mid <= %s) — taker exit %s", f6(slPrice), f6(remaining))
-						return takerExit(ctx, symbol, remaining, avgS6, targetS6, strat)
-					}
-					lf("bot-side SL hit, remainder %s below min qty — done", f6(remaining))
-					return nil
+					lf("SL bot-side (server SL tak tersedia) — market exit")
+					return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
 				}
 			}
 		}
 		if time.Since(started) > maxHold {
-			cancelOrder(ctx, symbol, sellCoid)
-			time.Sleep(400 * time.Millisecond)
-			remaining := filledS6
-			if st2, gerr := orderSnapshot(ctx, symbol, sellCoid); gerr == nil {
-				remaining = filledS6 - st2.cum
-			}
-			lf("max hold reached — taker exit %s", f6(remaining))
-			return takerExit(ctx, symbol, remaining, avgS6, targetS6, strat)
+			lf("max hold tercapai — market exit")
+			cancelTrigger(slID)
+			return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
 		}
 	}
 }
