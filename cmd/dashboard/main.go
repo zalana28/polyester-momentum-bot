@@ -130,6 +130,7 @@ func colorize(ev string) (string, string) {
 	return cGray, "."
 }
 
+func MathAbs(f float64) float64 { if f < 0 { return -f }; return f }
 func pad(s string, w int) string {
 	s = strings.ReplaceAll(s, "\x1b", "")
 	if len([]rune(s)) > w {
@@ -206,6 +207,27 @@ func main() {
 			moodText = "hunting dips..."
 		}
 
+		// ---- BOT LIVE: baca state-dip/live.json (ditulis bot tiap 2-6 dtk) ----
+		type liveState struct {
+			Ts         int64   `json:"ts"`
+			Phase      string  `json:"phase"`
+			Symbol     string  `json:"symbol"`
+			OrderPrice float64 `json:"order_price"`
+			Mid        float64 `json:"mid"`
+			DistBps    float64 `json:"dist_bps"`
+			Qty        float64 `json:"qty"`
+			Entry      float64 `json:"entry"`
+			Target     float64 `json:"target"`
+			Sl         float64 `json:"sl"`
+		}
+		var lv liveState
+		lvFresh := false
+		if raw, err := os.ReadFile(dir + "/state-dip/live.json"); err == nil {
+			if json.Unmarshal(raw, &lv) == nil && time.Now().Unix()-lv.Ts < 30 {
+				lvFresh = true
+			}
+		}
+
 		var b strings.Builder
 		b.WriteString("\x1b[H")
 		line := func(s string) { b.WriteString(pad(s, 100) + "\r\n") }
@@ -237,6 +259,33 @@ func main() {
 				txt = fmt.Sprintf("%s%s%s", cGray, "\"bot tetap headless di belakang saya~\"", cReset)
 			}
 			line("  ║  " + cCyn + ml + cReset + "   " + txt)
+		}
+		line("  ║                                                            " + cReset)
+		// ---- panel BOT LIVE ----
+		line(cBold + cMag + "  ╠══════════════════════════ BOT LIVE ════════════════════════╣" + cReset)
+		switch {
+		case lvFresh && lv.Phase == "WAIT_BUY":
+			need := "turun"
+			if lv.DistBps < 0 {
+				need = "naik"
+			}
+			line(fmt.Sprintf("  ║  ⏳ MENUNGGU DIP %s", lv.Symbol) + cReset)
+			line(fmt.Sprintf("  ║  order @ %s.g | pasar @ %s.g | butuh %s %s%.0f bps",
+				cYel, lv.OrderPrice, cReset, lv.Mid, cCyn, need, cReset, MathAbs(lv.DistBps)) + cReset)
+			line("  ║  maker sabar menunggu harga turun ke order...              " + cReset)
+		case lvFresh && lv.Phase == "HOLD":
+			unrl := (lv.Mid - lv.Entry) * lv.Qty
+			uc := cGrn
+			if unrl < 0 {
+				uc = cRed
+			}
+			line(fmt.Sprintf("  ║  💼 PEGANG %s  qty %s.g @ %s.g", lv.Symbol, lv.Qty, lv.Entry) + cReset)
+			line(fmt.Sprintf("  ║  mid %s.g | TP %s.g | SL %s.g | P/L mengambang %s$%+.2f%s",
+				lv.Mid, lv.Target, lv.Sl, uc, unrl, cReset) + cReset)
+		case lvFresh:
+			line("  ║  fase: " + lv.Phase + " " + lv.Symbol + "                                        " + cReset)
+		default:
+			line("  ║  (bot idle / tidak ada data live)                          " + cReset)
 		}
 		line("  ║                                                            " + cReset)
 		line(cBold + cMag + "  ╠══════════════════════ TRADES TERAKHIR ═════════════════════╣" + cReset)

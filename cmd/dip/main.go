@@ -91,6 +91,17 @@ func strPtr(s string) *string { return &s }
 
 func f6(v int64) string { return num.FormatScaled(v, 6) }
 
+// writeLive menulis status real-time utk dashboard TUI (state-dip/live.json)
+func writeLive(phase, symbol string, extra map[string]any) {
+	m := map[string]any{"ts": time.Now().Unix(), "phase": phase, "symbol": symbol}
+	for k, v := range extra {
+		m[k] = v
+	}
+	if raw, err := json.Marshal(m); err == nil {
+		_ = os.WriteFile("state-dip/live.json", raw, 0o644)
+	}
+}
+
 func jrnlEntry(kind, coid string, detail map[string]string) journal.Entry {
 	return journal.Entry{Kind: kind, ClientOrderID: coid, Detail: detail}
 }
@@ -193,6 +204,7 @@ func main() {
 		}
 		cycleNo++
 		sym := pickNext(cycleNo)
+		writeLive("CYCLE", sym, nil)
 		if rerr := runCycle(ctx, sym, cycleNo); rerr != nil {
 			logf("cycle %s: %v", sym, rerr)
 		}
@@ -387,6 +399,10 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 				}
 			} else {
 				lastSlErrLog = 0
+				writeLive("HOLD", symbol, map[string]any{
+					"entry": float64(avgS6) / 1e6, "mid": (b2 + a2) / 2 / 1e6,
+					"target": float64(targetS6) / 1e6, "sl": float64(slPrice) / 1e6,
+					"qty": float64(filledS6) / math.Pow10(int(info.BaseScale))})
 				if (b2+a2)/2 <= float64(slPrice)/1e6 {
 					cancelOrder(ctx, symbol, sellCoid)
 					time.Sleep(400 * time.Millisecond)
@@ -423,11 +439,22 @@ func placeAndAwaitBuy(ctx context.Context, symbol string, entryS6, qtyS6 int64, 
 		return 0, 0, err
 	}
 	deadline := time.Now().Add(time.Duration(envI("DIP_REPRICE_SEC", 90)) * time.Second)
+	liveI := 0
 	for {
 		if ctx.Err() != nil {
 			return 0, 0, ctx.Err()
 		}
 		time.Sleep(2 * time.Second)
+		liveI++
+		if liveI%3 == 1 { // status live utk dashboard tiap ~6 dtk
+			if b2, a2, e2 := bookTop(ctx, info); e2 == nil {
+				mid := (b2 + a2) / 2
+				writeLive("WAIT_BUY", symbol, map[string]any{
+					"order_price": float64(entryS6) / 1e6, "mid": mid / 1e6,
+					"dist_bps": (float64(mid) - float64(entryS6)) * 10000 / float64(entryS6),
+					"qty":      float64(qtyS6) / 1e6})
+			}
+		}
 		st, err := orderSnapshot(ctx, symbol, coid)
 		if err != nil {
 			continue
