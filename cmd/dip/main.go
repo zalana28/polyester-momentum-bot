@@ -348,6 +348,7 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 	started := time.Now()
 	maxHold := time.Duration(maxHoldMin) * time.Minute
 	slChecked := 0
+	lastSlErrLog := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -372,8 +373,20 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 			}
 		}
 		slChecked++
-		if slChecked%3 == 0 {
-			if b2, a2, berr := bookTop(ctx, info); berr == nil {
+		if slChecked%2 == 0 { // cek tiap ~4 dtk
+			b2, a2, berr := bookTop(ctx, info)
+			if berr != nil { // API lemot: satu retry dgn context segar
+				fctx, fc := context.WithTimeout(context.Background(), 5*time.Second)
+				b2, a2, berr = bookTop(fctx, info)
+				fc()
+			}
+			if berr != nil {
+				if slChecked-lastSlErrLog > 15 { // log maksimal tiap ~30 dtk
+					lf("SL check gagal (%v) — watchdog buta sementara", berr)
+					lastSlErrLog = slChecked
+				}
+			} else {
+				lastSlErrLog = 0
 				if (b2+a2)/2 <= float64(slPrice)/1e6 {
 					cancelOrder(ctx, symbol, sellCoid)
 					time.Sleep(400 * time.Millisecond)
