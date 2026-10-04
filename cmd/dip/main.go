@@ -476,8 +476,19 @@ func takerExit(ctx context.Context, symbol string, qtyS6, avgS6, targetS6 int64,
 		return fmt.Errorf("taker sell: %w", err)
 	}
 	exitS6 := int64(0)
-	if gr, gerr := client.Orders.Get(ctx, nil, models.OrderKeyByClientID(coid), nil, false, false); gerr == nil && gr.Order != nil {
-		exitS6 = wireTicksToTrue6(gr.Order.AvgPx.Ticks(), info.WireShift)
+	for i := 0; i < 10; i++ { // AvgPx butuh waktu terisi; retry ~5 dtk
+		if gr, gerr := client.Orders.Get(ctx, nil, models.OrderKeyByClientID(coid), nil, false, false); gerr == nil && gr.Order != nil {
+			exitS6 = wireTicksToTrue6(gr.Order.AvgPx.Ticks(), info.WireShift)
+			if exitS6 > 0 {
+				break
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if exitS6 == 0 { // fallback: mid pasar saat ini
+		if b2, a2, berr := bookTop(ctx, info); berr == nil {
+			exitS6 = int64((b2 + a2) / 2 * 1e6)
+		}
 	}
 	bookCycle(symbol, strat, avgS6, qtyS6, exitS6, "taker_exit", 0.001, 0.0015)
 	logf("%s TAKER EXIT %s @ %s", symbol, f6(qtyS6), f6(exitS6))
