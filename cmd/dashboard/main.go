@@ -159,7 +159,6 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	fmt.Print("\x1b[?1049h\x1b[?25l") // alternate screen, sembunyikan kursor
 	defer fmt.Print("\x1b[?25h\x1b[?1049l")
-	lastSize := ""
 	for {
 		st := loadStats()
 		trades := loadTrades(5)
@@ -263,13 +262,10 @@ func main() {
 			line(fmt.Sprintf("  ║  %s%s %s%s", cGray+m[1]+cReset, col, m[2], cReset))
 		}
 		line(cBold + cMag + "  ╚════════════════════════════════════════════════════════════╝" + cReset)
-		line(cGray + "  ./bin/dashboard — Ctrl+C keluar (bot tidak terganggu)" + cReset)
+		spin := []string{"|", "/", "-", "\\"}[int(time.Now().Unix())%4]
+		line(cGray + "  " + spin + " LIVE " + time.Now().UTC().Format("15:04:05") + " UTC · memantau logs/dip.log · Ctrl+C keluar (bot tidak terganggu)" + cReset)
 
-		out := b.String()
-		if out != lastSize {
-			fmt.Print(out)
-			lastSize = out
-		}
+		fmt.Print(b.String())
 		time.Sleep(1 * time.Second)
 	}
 }
