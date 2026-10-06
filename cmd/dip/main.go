@@ -200,6 +200,7 @@ func main() {
 		}
 		if netPnL <= peakNet-maxLoss {
 			logf("drawdown %.2f from peak %.2f exceeds cap %.0f — stopping", peakNet-netPnL, peakNet, maxLoss)
+			_ = os.WriteFile("state-dip/STOP", []byte("loss-cap"), 0o644)
 			break
 		}
 		cycleNo++
