@@ -148,6 +148,13 @@ func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalR
 		}
 	}
 
+	b.executeEntry(s, budget, stratName, signalScore, signalRegime)
+}
+
+// executeEntry places the market buy and its protection. Shared by the signal
+// path (handleBuy) and manual orders from the control socket, so a chat-driven
+// entry gets exactly the same stop-loss and exit plan as a signal-driven one.
+func (b *Bot) executeEntry(s *symRT, budget int64, stratName string, signalScore float64, signalRegime string) error {
 	coid := b.newID(s, "buy")
 	fill, err := s.exec.Buy(b.opCtx, budget, coid)
 	if err != nil {
@@ -156,7 +163,7 @@ func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalR
 			if b.cfg.Mode == configModeLive {
 				b.log.Printf("[EXEC] %s buy ambiguous: reconciling before anything else", s.symbol)
 				b.reconcile(b.opCtx, s)
-				return
+				return fmt.Errorf("buy ambiguous: %w", err)
 			}
 			b.log.Printf("[EXEC] %s buy ambiguous (paper): %v", s.symbol, err)
 		case errors.Is(err, execution.ErrDust):
@@ -164,7 +171,7 @@ func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalR
 		default:
 			b.log.Printf("[EXEC] %s buy failed: %v", s.symbol, err)
 		}
-		return
+		return err
 	}
 
 	avgScaled6 := fill.AvgPriceScaled6
@@ -177,7 +184,7 @@ func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalR
 		b.log.Printf("[EXEC] CRITICAL: %s derived trigger prices invalid (avg=%d sl=%d tp=%d); flattening",
 			s.symbol, avgScaled6, slScaled6, tpScaled6)
 		b.emergencyFlatten(s, fill.BaseQtyScaled, avgScaled6, "invalid trigger prices")
-		return
+		return fmt.Errorf("derived trigger prices invalid")
 	}
 	if fill.Partial {
 		b.log.Printf("[EXEC] note: partial IOC fill (status=%s)", fill.Status)
@@ -190,7 +197,7 @@ func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalR
 		if rerr != nil {
 			b.log.Printf("[EXEC] CRITICAL: %s re-arm failed (%v); emergency flatten", s.symbol, rerr)
 			b.emergencyFlatten(s, fill.BaseQtyScaled, avgScaled6, "exit placement failed")
-			return
+			return fmt.Errorf("stop-loss placement failed: %w", err)
 		}
 		sl = sl2
 	}
@@ -220,6 +227,7 @@ func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalR
 		num.FormatScaled(avgScaled6, 6),
 		num.FormatScaled(slScaled6, 6), num.FormatScaled(tpScaled6, 6),
 		sl.TriggerID)
+	return nil
 }
 
 // handleExit flattens the symbol's open position (cancel exits first, then sell).

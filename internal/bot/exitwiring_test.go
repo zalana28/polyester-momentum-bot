@@ -21,9 +21,18 @@ type fakeExec struct {
 	execution.Executor
 	price  int64
 	sells  []int64 // quantities sold, in order
+	buys   []int64 // quote budgets bought, in order
 	qty    int64   // last stop-loss quantity
 	sls    int
 	closed []string // client order ids of sells
+}
+
+func (f *fakeExec) Buy(_ context.Context, budget int64, id string) (*execution.Fill, error) {
+	f.buys = append(f.buys, budget)
+	return &execution.Fill{
+		BaseQtyScaled: 1000, AvgPriceScaled6: f.price,
+		ClientOrderID: id, OrderID: "ord-" + id, Status: "filled",
+	}, nil
 }
 
 func (f *fakeExec) Sell(_ context.Context, qty int64, id string) (*execution.Fill, error) {

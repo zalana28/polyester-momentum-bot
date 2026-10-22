@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -171,6 +172,18 @@ func Run(ctx context.Context, cfg *config.Config, logr *log.Logger) error {
 		key := risk.DayKeyUTC(time.Now())
 		b.st.RollDay(key, eq)
 		b.log.Printf("[RISK] day %s baseline equity %.2f", key, eq)
+	}
+
+	if cfg.ControlEnabled {
+		sock := cfg.ControlSocket
+		if sock == "" {
+			sock = filepath.Join(cfg.StateDir, "control.sock")
+		}
+		go func() {
+			if err := b.ServeControl(sock); err != nil {
+				logr.Printf("[CTL] server stopped: %v", err)
+			}
+		}()
 	}
 
 	b.log.Printf("[BOOT] running — %d symbol(s), waiting for signals", len(b.syms))

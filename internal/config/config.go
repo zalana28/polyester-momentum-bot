@@ -105,6 +105,12 @@ type Config struct {
 	// an order. It is how the bot earns the right to trade: run with it until
 	// the edge report shows positive net expectancy, then turn it off.
 	ShadowOnly bool
+
+	// Control socket: a local unix socket for manual orders (chat-driven).
+	// Off unless CONTROL_ENABLED=true; the socket is 0600 inside StateDir.
+	ControlEnabled         bool
+	ControlSocket          string
+	ManualMaxNotionalQuote float64
 }
 
 // FromEnv builds configuration. dotenvPaths are consulted (first match wins)
@@ -172,6 +178,9 @@ func FromEnv(dotenvPaths ...string) (*Config, error) {
 		c.WSURL = DefaultWSURL
 	}
 	c.ShadowOnly = boolFrom(get, "SHADOW_ONLY", false)
+	c.ControlEnabled = boolFrom(get, "CONTROL_ENABLED", false)
+	c.ControlSocket = get("CONTROL_SOCKET")
+	c.ManualMaxNotionalQuote = floatFrom(get, "MANUAL_MAX_NOTIONAL", 0)
 	c.MaxSlippageBps = int32(intFrom(get, "MAX_SLIPPAGE_BPS", 50))
 	c.FlattenOn = true
 	if v := get("FLATTEN_ON_SHUTDOWN"); v != "" {
