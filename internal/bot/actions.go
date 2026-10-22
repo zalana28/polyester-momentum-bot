@@ -106,6 +106,12 @@ func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalR
 		b.log.Printf("[EXEC] %s buy skipped: position already open", s.symbol)
 		return
 	}
+	// Fail closed: without a fresh balance reading the daily-loss guard cannot
+	// evaluate, so a new position would be opened blind.
+	if b.cfg.Mode == configModeLive && !b.equityFresh(time.Now()) {
+		b.log.Printf("[EXEC] %s buy skipped: equity unknown (ledger read failing) — daily-loss guard cannot evaluate", s.symbol)
+		return
+	}
 	if err := b.dec.CanOpenPosition(b.st.Halted(), 0); err != nil {
 		b.log.Printf("[EXEC] buy skipped: %v", err)
 		return
@@ -545,33 +551,18 @@ func (b *Bot) checkPositionFlat(s *symRT, via string) {
 	}
 }
 
-// onFeedError restarts one symbol's feeds; live mode reconciles afterwards.
+// onFeedError records a symbol feed failure. Reconnect timing lives in
+// market.Feeds (backoff, then REST polling); recovery re-triggers reconcile
+// through Feeds.SetOnRestore.
 func (b *Bot) onFeedError(s *symRT, err error) {
+	// Feeds own their reconnect timing (backoff, then REST polling) so a
+	// flapping stream cannot turn into a subscribe/reset storm. The bot only
+	// records the failure; recovery is reported via Feeds.SetOnRestore.
 	if s == nil {
-		// Account-wide stream loss: degrade gracefully (reconcile covers).
 		b.log.Printf("[FEED] stream failure: %v", err)
 		return
 	}
 	b.log.Printf("[FEED] %s feed failure: %v", s.symbol, err)
-	if b.st.Halted() {
-		return
-	}
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if b.runCtx.Err() != nil {
-			return
-		}
-		if lastErr = s.feeds.Restart(b.runCtx); lastErr == nil {
-			b.log.Printf("[FEED] %s subscriptions restored", s.symbol)
-			if b.cfg.Mode == configModeLive {
-				b.reconcile(b.opCtx, s)
-			}
-			return
-		}
-		time.Sleep(2 * time.Second)
-	}
-	b.log.Printf("[FEED] CRITICAL: %s restart failed 3 times (%v); halting", s.symbol, lastErr)
-	b.st.Halt("feeds down: " + lastErr.Error())
 }
 
 // startupReconcile replays the journal then reconciles every symbol.
@@ -677,7 +668,7 @@ func (b *Bot) reconcile(ctx context.Context, s *symRT) {
 func (b *Bot) reconcileNoPosition(ctx context.Context, s *symRT, slRef *execution.TriggerRef) {
 	baseUnits, berr := s.exec.BaseBalance(ctx)
 	if berr != nil {
-		b.log.Printf("[RECON] %s base balance failed: %v", s.symbol, berr)
+		b.logReconFail(s.symbol, berr)
 		return
 	}
 	dustUnits := num.ScaledToFloat(s.mi.MinQtyScaled, s.mi.BaseScale)

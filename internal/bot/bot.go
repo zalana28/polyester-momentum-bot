@@ -22,6 +22,7 @@ import (
 	"polyester-momentum-bot/internal/config"
 	"polyester-momentum-bot/internal/execution"
 	"polyester-momentum-bot/internal/journal"
+	"polyester-momentum-bot/internal/ledgerx"
 	"polyester-momentum-bot/internal/market"
 	"polyester-momentum-bot/internal/num"
 	"polyester-momentum-bot/internal/risk"
@@ -75,6 +76,17 @@ type Bot struct {
 	deadManArmed   bool
 	shutdownOnce   sync.Once
 	sizingOverride float64 // brain conviction multiplier for the pending buy
+
+	// loop-owned throttle for ledger read failures (see logEquityUnavailable).
+	eqFailLast time.Time
+	eqFailN    int
+
+	// equityAt is the last successful balance read. Entries are blocked when it
+	// goes stale: without equity the daily-loss guard cannot evaluate.
+	equityAt time.Time
+
+	// reconFailAt throttles per-symbol reconcile failures (loop-owned).
+	reconFailAt map[string]time.Time
 }
 
 // Run builds and runs a bot until ctx is cancelled.
@@ -124,6 +136,16 @@ func Run(ctx context.Context, cfg *config.Config, logr *log.Logger) error {
 			return fmt.Errorf("feeds %s: %w", s.symbol, err)
 		}
 		s.feeds = feeds
+		sym := s
+		feeds.SetOnRestore(func() {
+			// Feeds recovered: re-check account state for this symbol. Posted to
+			// the event loop because all state mutation is loop-owned.
+			b.post(func() {
+				if b.cfg.Mode == config.ModeLive && !b.st.Halted() {
+					b.reconcile(b.opCtx, sym)
+				}
+			})
+		})
 		if err := b.seedEngine(ctx, s); err != nil {
 			return fmt.Errorf("seed %s: %w", s.symbol, err)
 		}
@@ -182,6 +204,8 @@ func (b *Bot) tradePoll() time.Duration {
 func (b *Bot) connect() error {
 	pc := polyester.Config{
 		Environment:     &polyester.TestnetEnvironment,
+		APIURL:          b.cfg.APIURL,
+		WSURL:           b.cfg.WSURL,
 		HydrateCatalogs: true,
 	}
 	if b.cfg.Mode == config.ModeLive {
@@ -595,9 +619,9 @@ func (b *Bot) shutdown() {
 // globalEquity estimates account equity in quote units: available quote plus
 // every symbol's base position valued at its mark. One balances call.
 func (b *Bot) globalEquity(ctx context.Context) float64 {
-	balances, err := b.client.Balances.List(ctx, nil, nil)
+	balances, err := ledgerx.List(ctx, b.client)
 	if err != nil {
-		b.log.Printf("[WARN] equity: balances unavailable: %v", err)
+		b.logEquityUnavailable(err)
 		return 0
 	}
 	trading := map[uint32]float64{}
@@ -621,7 +645,51 @@ func (b *Bot) globalEquity(ctx context.Context) float64 {
 			baseValue += baseQty * s.mark
 		}
 	}
+	b.equityAt = time.Now()
 	return quote + baseValue
+}
+
+// equityMaxAge bounds how old a balance read may be before new entries are
+// refused. A stale reading makes the daily-loss guard blind, and the guard is
+// the only thing that stops a bad day from compounding.
+const equityMaxAge = 3 * time.Minute
+
+// equityFresh reports whether the last successful balance read is recent
+// enough to trust. Fail-closed: no fresh equity, no new positions. Exits and
+// protective orders are never gated on this.
+func (b *Bot) equityFresh(now time.Time) bool {
+	return !b.equityAt.IsZero() && now.Sub(b.equityAt) <= equityMaxAge
+}
+
+// logReconFail throttles per-symbol reconcile warnings to one per minute so a
+// ledger outage cannot bury every other line in the log.
+func (b *Bot) logReconFail(symbol string, err error) {
+	if b.reconFailAt == nil {
+		b.reconFailAt = map[string]time.Time{}
+	}
+	if time.Since(b.reconFailAt[symbol]) < time.Minute {
+		return
+	}
+	b.reconFailAt[symbol] = time.Now()
+	b.log.Printf("[RECON] %s base balance failed: %v", symbol, err)
+}
+
+// logEquityUnavailable throttles ledger failure warnings. The ledger read
+// service answers 503 in bursts; one line per retry budget would flood the log
+// and hide real events. Also states the safety consequence explicitly: while
+// equity is unknown the daily-loss guard cannot evaluate, so it is paused.
+func (b *Bot) logEquityUnavailable(err error) {
+	if time.Since(b.eqFailLast) < time.Minute {
+		b.eqFailN++
+		return
+	}
+	suppressed := ""
+	if b.eqFailN > 0 {
+		suppressed = fmt.Sprintf(" (%d similar failures suppressed)", b.eqFailN)
+	}
+	b.log.Printf("[WARN] equity unavailable (ledger read failed after retries): %v%s — daily loss guard paused", err, suppressed)
+	b.eqFailLast = time.Now()
+	b.eqFailN = 0
 }
 
 // riskEval rolls the risk day and trips the kill switch when needed.

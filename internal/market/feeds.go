@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"sort"
 	"strconv"
 	"sync"
@@ -55,6 +56,13 @@ type Feeds struct {
 	bookSub   *orderbook.Subscription
 	closed    bool
 
+	// supCh wakes the reconnect supervisor; restoreFn is called after a
+	// successful recovery so the bot can reconcile account state.
+	supCh     chan struct{}
+	restoreFn func()
+
+	// modeMu guards pollMode (supervisor and loop both read it).
+	modeMu            sync.Mutex
 	pollMode          bool
 	candlePoll        time.Duration
 	tradePoll         time.Duration
@@ -90,6 +98,7 @@ func Start(ctx context.Context, client *polyester.Client, symbol, timeframe stri
 		tradeCh:    make(chan models.MarketTrade, 512),
 		bookCh:     make(chan models.OrderbookData, 32),
 		errCh:      make(chan error, 16),
+		supCh:      make(chan struct{}, 16),
 	}
 	streamErr := f.startSubs(ctx)
 	if streamErr != nil {
@@ -97,9 +106,10 @@ func Start(ctx context.Context, client *polyester.Client, symbol, timeframe stri
 		if err := f.startPollers(ctx); err != nil {
 			return nil, fmt.Errorf("stream (%v) and poll (%v) both failed", streamErr, err)
 		}
-		f.pollMode = true
+		f.setPollMode(true)
 		logr.Printf("[FEED] REST polling active: candles every %s, trades every %s", f.candlePoll, f.tradePoll)
 	}
+	go f.supervise(ctx)
 	return f, nil
 }
 
@@ -199,21 +209,172 @@ func (f *Feeds) Close() {
 // pollers live as long as ctx. Passing a timeout context here would silently
 // kill the new feeds when it expires.
 func (f *Feeds) Restart(ctx context.Context) error {
-	f.log.Printf("[FEED] restarting feeds")
 	f.Close()
 	f.mu.Lock()
 	f.closed = false // Close() marks shutdown; a restart is not a shutdown
 	f.mu.Unlock()
 	time.Sleep(500 * time.Millisecond) // let sockets drain
-	if f.pollMode {
+	if f.isPollMode() {
 		return f.startPollers(ctx)
 	}
 	if err := f.startSubs(ctx); err != nil {
-		f.log.Printf("[FEED] websocket still unavailable (%v); switching to REST polling", err)
-		f.pollMode = true
+		f.log.Printf("[FEED] %s: websocket still unavailable (%v); switching to REST polling", f.symbol, err)
+		f.setPollMode(true)
 		return f.startPollers(ctx)
 	}
 	return nil
+}
+
+// SetOnRestore registers a callback run after feeds recover from a failure
+// (used to reconcile account state). The callback must not block: it is called
+// on the supervisor goroutine.
+func (f *Feeds) SetOnRestore(cb func()) {
+	f.mu.Lock()
+	f.restoreFn = cb
+	f.mu.Unlock()
+}
+
+func (f *Feeds) isPollMode() bool {
+	f.modeMu.Lock()
+	defer f.modeMu.Unlock()
+	return f.pollMode
+}
+
+func (f *Feeds) setPollMode(on bool) {
+	f.modeMu.Lock()
+	f.pollMode = on
+	f.modeMu.Unlock()
+}
+
+// Reconnect policy. A failing subscription used to restart immediately, which
+// turned one flapping symbol into a permanent subscribe/reset storm: every
+// reset created three fresh subscriptions, the venue reset them again, and the
+// loop never converged. Reconnects are now spread out, and after
+// reconnectMaxRapid consecutive rapid failures the symbol parks on REST polling
+// (identical closed-candle semantics) with a single websocket probe per
+// cooldown instead of an endless retry loop.
+const (
+	reconnectBaseDelay = 500 * time.Millisecond
+	reconnectMaxDelay  = 30 * time.Second
+	reconnectMaxRapid  = 5
+	reconnectStableFor = 90 * time.Second
+	reconnectPollCool  = 15 * time.Minute
+)
+
+// backoffDelay returns the wait before reconnect attempt n (1-based):
+// 500ms·2^(n-1) capped at 30s, with ±20% jitter so a fleet of symbols does not
+// reconnect in lockstep.
+func backoffDelay(n int) time.Duration {
+	if n < 1 {
+		n = 1
+	}
+	shift := n - 1
+	if shift > 6 {
+		shift = 6
+	}
+	delay := reconnectBaseDelay * time.Duration(1<<shift)
+	if delay > reconnectMaxDelay {
+		delay = reconnectMaxDelay
+	}
+	return time.Duration(float64(delay) * (0.8 + 0.4*rand.Float64()))
+}
+
+// supervise owns reconnect timing for this symbol: backoff, REST fallback and
+// the cooldown probe back to websocket.
+func (f *Feeds) supervise(ctx context.Context) {
+	failures := 0
+	var upSince time.Time
+	var probe <-chan time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-probe:
+			probe = nil
+			if err := f.tryWebsocket(ctx); err != nil {
+				f.log.Printf("[FEED] %s: websocket probe failed (%v); staying on REST polling", f.symbol, err)
+				probe = time.After(reconnectPollCool)
+				continue
+			}
+			f.log.Printf("[FEED] %s: subscriptions restored (websocket)", f.symbol)
+			upSince = time.Now()
+			failures = 0
+			f.restore()
+			continue
+		case <-f.supCh:
+		}
+		if f.isPollMode() {
+			continue // pollers retry themselves and log throttled
+		}
+		if !upSince.IsZero() && time.Since(upSince) >= reconnectStableFor {
+			failures = 0
+		}
+		failures++
+		if failures > reconnectMaxRapid {
+			f.log.Printf("[FEED] %s: %d consecutive feed failures; switching to REST polling", f.symbol, failures)
+			if err := f.switchToPoll(ctx); err != nil {
+				f.log.Printf("[FEED] %s: REST polling failed to start: %v", f.symbol, err)
+				continue
+			}
+			failures = 0
+			probe = time.After(reconnectPollCool)
+			continue
+		}
+		delay := backoffDelay(failures)
+		f.log.Printf("[FEED] %s: reconnecting in %s (attempt %d/%d)", f.symbol, delay.Round(time.Millisecond), failures, reconnectMaxRapid)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		upSince = time.Now()
+		if err := f.Restart(ctx); err != nil {
+			f.log.Printf("[FEED] %s: reconnect failed: %v", f.symbol, err)
+			continue
+		}
+		if f.isPollMode() {
+			continue // Restart already fell back to REST polling
+		}
+		f.log.Printf("[FEED] %s: subscriptions restored", f.symbol)
+		f.restore()
+	}
+}
+
+// switchToPoll parks the feeds on REST polling until the next probe.
+func (f *Feeds) switchToPoll(ctx context.Context) error {
+	f.Close()
+	f.mu.Lock()
+	f.closed = false
+	f.mu.Unlock()
+	f.setPollMode(true)
+	return f.startPollers(ctx)
+}
+
+// tryWebsocket leaves REST polling and retries the streams. It falls back to
+// polling again when the handshake fails.
+func (f *Feeds) tryWebsocket(ctx context.Context) error {
+	f.Close()
+	f.mu.Lock()
+	f.closed = false
+	f.mu.Unlock()
+	f.setPollMode(false)
+	if err := f.startSubs(ctx); err != nil {
+		f.setPollMode(true)
+		if perr := f.startPollers(ctx); perr != nil {
+			return fmt.Errorf("websocket: %v; rest poll: %w", err, perr)
+		}
+		return err
+	}
+	return nil
+}
+
+func (f *Feeds) restore() {
+	f.mu.Lock()
+	cb := f.restoreFn
+	f.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
 }
 
 // startPollers runs the REST fallback: closed candles every 5s, trades every
@@ -340,6 +501,11 @@ func (f *Feeds) pushErr(err error) {
 	case f.errCh <- err:
 	default:
 		// Error channel full: the bot already has a pending failure to act on.
+	}
+	select {
+	case f.supCh <- struct{}{}:
+	default:
+		// A reconnect is already queued.
 	}
 }
 

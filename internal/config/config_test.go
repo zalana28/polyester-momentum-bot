@@ -81,3 +81,42 @@ func TestValidationRejectsBadSlippage(t *testing.T) {
 		t.Fatal("slippage 20000 must be rejected")
 	}
 }
+
+func TestEndpointDefaultsPointAtLiveTestnetHost(t *testing.T) {
+	os.Unsetenv("POLYESTER_API_URL")
+	os.Unsetenv("POLYESTER_WS_URL")
+	cfg, err := FromEnv(filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatalf("defaults must be valid: %v", err)
+	}
+	if cfg.APIURL != DefaultAPIURL || cfg.WSURL != DefaultWSURL {
+		t.Fatalf("endpoint defaults: got %q/%q want %q/%q", cfg.APIURL, cfg.WSURL, DefaultAPIURL, DefaultWSURL)
+	}
+	if DefaultAPIURL != "https://api.testnet.polyester.com" {
+		t.Fatalf("retired host regression: %q", DefaultAPIURL)
+	}
+}
+
+func TestEndpointOverridesFromEnv(t *testing.T) {
+	t.Setenv("POLYESTER_API_URL", "https://api-devnet.polyester.ai")
+	t.Setenv("POLYESTER_WS_URL", "wss://api-devnet.polyester.ai")
+	cfg, err := FromEnv(filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatalf("override must be valid: %v", err)
+	}
+	if cfg.APIURL != "https://api-devnet.polyester.ai" || cfg.WSURL != "wss://api-devnet.polyester.ai" {
+		t.Fatalf("override ignored: %q/%q", cfg.APIURL, cfg.WSURL)
+	}
+}
+
+func TestEndpointRejectsBadScheme(t *testing.T) {
+	t.Setenv("POLYESTER_API_URL", "ftp://api.testnet.polyester.com")
+	if _, err := FromEnv(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("expected a scheme validation error")
+	}
+	t.Setenv("POLYESTER_API_URL", "https://api.testnet.polyester.com")
+	t.Setenv("POLYESTER_WS_URL", "https://api.testnet.polyester.com")
+	if _, err := FromEnv(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("expected a websocket scheme validation error")
+	}
+}

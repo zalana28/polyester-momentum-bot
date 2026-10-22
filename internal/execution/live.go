@@ -15,6 +15,7 @@ import (
 	sdkerrors "github.com/Fabric-Labs/polyester-sdk-go/errors"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 
+	"polyester-momentum-bot/internal/ledgerx"
 	"polyester-momentum-bot/internal/num"
 )
 
@@ -586,7 +587,7 @@ func (l *LiveExecutor) BaseBalance(ctx context.Context) (float64, error) {
 }
 
 func (l *LiveExecutor) balanceFloat(ctx context.Context, assetID uint32, field string) (float64, error) {
-	balances, err := l.client.Balances.List(ctx, nil, nil)
+	balances, err := ledgerx.List(ctx, l.client)
 	if err != nil {
 		return 0, err
 	}

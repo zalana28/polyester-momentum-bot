@@ -14,6 +14,15 @@ import (
 	"polyester-momentum-bot/internal/num"
 )
 
+// post enqueues f onto the event loop from any goroutine. It blocks until the
+// loop accepts the work or the bot stops, which keeps ordering deterministic.
+func (b *Bot) post(f func()) {
+	select {
+	case b.acts <- f:
+	case <-b.runCtx.Done():
+	}
+}
+
 // isDust reports whether the error is the dust sentinel.
 func isDust(err error) bool { return errors.Is(err, execution.ErrDust) }
 

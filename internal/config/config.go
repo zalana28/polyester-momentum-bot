@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -11,6 +12,15 @@ import (
 
 // Mode selects paper (simulation) vs live (testnet orders) operation.
 type Mode string
+
+// Default API endpoints. The SDK's TestnetEnvironment preset still points at
+// the retired api-testnet.polyester.com (NXDOMAIN); the live testnet host is
+// the dotted api.testnet.polyester.com. Override with POLYESTER_API_URL /
+// POLYESTER_WS_URL.
+const (
+	DefaultAPIURL = "https://api.testnet.polyester.com"
+	DefaultWSURL  = "wss://api.testnet.polyester.com"
+)
 
 const (
 	ModePaper Mode = "paper"
@@ -73,6 +83,11 @@ type Config struct {
 
 	// Paper mode.
 	PaperStartQuote string // virtual starting quote balance
+
+	// API endpoints. Defaults point at the live testnet host; override with
+	// POLYESTER_API_URL / POLYESTER_WS_URL (for example to run on devnet).
+	APIURL string
+	WSURL  string
 }
 
 // FromEnv builds configuration. dotenvPaths are consulted (first match wins)
@@ -123,6 +138,14 @@ func FromEnv(dotenvPaths ...string) (*Config, error) {
 		BrainMinScore:     floatFrom(get, "BRAIN_MIN_SCORE", 60),
 		BrainCooldownMin:  floatFrom(get, "BRAIN_COOLDOWN_MIN", 10),
 		EnsembleThreshold: floatFrom(get, "ENSEMBLE_THRESHOLD", 0.5),
+		APIURL:            get("POLYESTER_API_URL"),
+		WSURL:             get("POLYESTER_WS_URL"),
+	}
+	if c.APIURL == "" {
+		c.APIURL = DefaultAPIURL
+	}
+	if c.WSURL == "" {
+		c.WSURL = DefaultWSURL
 	}
 	c.MaxSlippageBps = int32(intFrom(get, "MAX_SLIPPAGE_BPS", 50))
 	c.FlattenOn = true
@@ -167,11 +190,31 @@ func FromEnv(dotenvPaths ...string) (*Config, error) {
 	return c, nil
 }
 
+// validateEndpoint rejects malformed or scheme-mismatched endpoint overrides.
+func validateEndpoint(raw, key string, schemes ...string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("config: %s must be an absolute URL (got %q)", key, raw)
+	}
+	for _, scheme := range schemes {
+		if parsed.Scheme == scheme {
+			return nil
+		}
+	}
+	return fmt.Errorf("config: %s scheme must be one of %s (got %q)", key, strings.Join(schemes, "/"), parsed.Scheme)
+}
+
 func (c *Config) validate() error {
 	switch c.Mode {
 	case ModePaper, ModeLive:
 	default:
 		return fmt.Errorf("config: MODE must be paper or live (got %q)", c.Mode)
+	}
+	if err := validateEndpoint(c.APIURL, "POLYESTER_API_URL", "http", "https"); err != nil {
+		return err
+	}
+	if err := validateEndpoint(c.WSURL, "POLYESTER_WS_URL", "ws", "wss"); err != nil {
+		return err
 	}
 	if c.Mode == ModeLive {
 		if c.APIKeyID == "" || c.APIPrivateKey == "" {
