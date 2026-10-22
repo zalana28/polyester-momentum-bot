@@ -780,7 +780,10 @@ func (b *Bot) ensReport(s *symRT, strategyName string, exitScaled6, entryScaled6
 
 // bookTop returns best bid/ask (true price) from the symbol's last book
 // snapshot; zeros when the book is not available.
-func bookTop(s *symRT) (float64, float64) {
+func bookTop(s *symRT) (bid, ask float64) {
+	if s == nil || s.feeds == nil {
+		return 0, 0 // no feeds attached (startup, tests): no book to quote
+	}
 	b := s.feeds.LastBook()
 	if len(b.Bids) == 0 || len(b.Asks) == 0 {
 		return 0, 0
