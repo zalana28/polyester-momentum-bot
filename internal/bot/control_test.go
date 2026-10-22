@@ -112,12 +112,39 @@ func TestManualSellPartialRearms(t *testing.T) {
 }
 
 func TestManualSellRefusesWithoutPosition(t *testing.T) {
-	b, s, _ := ctlFixture(t)
+	b, s, ex := ctlFixture(t)
+	ex.baseBalance = 0
 	if _, err := b.doManualSell(s, 10); err == nil {
-		t.Fatal("sell without position must be refused")
+		t.Fatal("sell with no position and no balance must be refused")
 	}
 	if _, err := b.doFlatten(s); err == nil {
 		t.Fatal("flatten without position must be refused")
+	}
+}
+
+// A manual holding (no tracked position) can be sold from the base balance; the
+// bot must not invent position state for it, and must refuse more than it holds.
+func TestSpotSellFromBalance(t *testing.T) {
+	b, s, ex := ctlFixture(t)
+	ex.baseBalance = 3.5
+	ex.price = 78_500_000
+
+	msg, err := b.doManualSell(s, 3_000_000) // 3.0 HYPE at scale 6
+	if err != nil {
+		t.Fatalf("spot sell: %v", err)
+	}
+	if len(ex.sells) != 1 || ex.sells[0] != 3_000_000 {
+		t.Fatalf("expected one sell of 3.0, got %v", ex.sells)
+	}
+	if s.pos != nil {
+		t.Fatal("spot sell must not create position state")
+	}
+	if msg == "" {
+		t.Fatal("expected a message")
+	}
+
+	if _, err := b.doManualSell(s, 4_000_000); err == nil {
+		t.Fatal("selling more than the balance must be refused")
 	}
 }
 

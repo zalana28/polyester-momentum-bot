@@ -307,10 +307,12 @@ func (b *Bot) doManualBuy(s *symRT, budget int64) (string, error) {
 
 // doManualSell sells at market. A qty at or above the position closes it; a
 // smaller qty reduces the position and re-arms the stop for the remainder.
+// With no tracked position, it sells the base balance the account actually
+// holds (a manual/spot holding the bot does not manage).
 func (b *Bot) doManualSell(s *symRT, qty int64) (string, error) {
 	pos := s.pos
 	if pos == nil {
-		return "", fmt.Errorf("%s tidak punya posisi terbuka", s.symbol)
+		return b.doSpotSell(s, qty)
 	}
 	if qty <= 0 {
 		return "", fmt.Errorf("qty harus positif")
@@ -354,4 +356,31 @@ func (b *Bot) doFlatten(s *symRT) (string, error) {
 		return "", fmt.Errorf("%s gagal close penuh; cek log", s.symbol)
 	}
 	return fmt.Sprintf("FLATTEN %s %s", s.symbol, num.FormatScaled(qty, s.mi.BaseScale)), nil
+}
+
+// doSpotSell sells base the bot holds but does not manage as a position (a
+// manual holding). It deliberately touches no position state: there is no stop
+// to cancel and no strategy PnL to book. The venue still enforces reservation,
+// so an amount locked by an order or withdrawal fails here rather than
+// silently selling something else.
+func (b *Bot) doSpotSell(s *symRT, qty int64) (string, error) {
+	if qty <= 0 {
+		return "", fmt.Errorf("qty harus positif")
+	}
+	bal, err := s.exec.BaseBalance(b.opCtx)
+	if err != nil {
+		return "", fmt.Errorf("saldo %s tidak terbaca: %w", s.symbol, err)
+	}
+	have := num.FloatToScaledRounded(bal, s.mi.BaseScale)
+	if qty > have {
+		return "", fmt.Errorf("qty %s melebihi saldo %s", num.FormatScaled(qty, s.mi.BaseScale),
+			num.FormatScaled(have, s.mi.BaseScale))
+	}
+	fill, err := s.exec.Sell(b.opCtx, qty, b.newID(s, "spot"))
+	if err != nil {
+		return "", fmt.Errorf("sell gagal: %w", err)
+	}
+	return fmt.Sprintf("SELL %s %s @ %s (dari saldo, bukan posisi bot)", s.symbol,
+		num.FormatScaled(fill.BaseQtyScaled, s.mi.BaseScale),
+		num.FormatScaled(fill.AvgPriceScaled6, 6)), nil
 }

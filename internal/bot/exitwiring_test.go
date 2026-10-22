@@ -19,13 +19,16 @@ import (
 // Executor panics loudly if the bot reaches for anything unexpected.
 type fakeExec struct {
 	execution.Executor
-	price  int64
-	sells  []int64 // quantities sold, in order
-	buys   []int64 // quote budgets bought, in order
-	qty    int64   // last stop-loss quantity
-	sls    int
-	closed []string // client order ids of sells
+	price       int64
+	sells       []int64 // quantities sold, in order
+	buys        []int64 // quote budgets bought, in order
+	qty         int64   // last stop-loss quantity
+	sls         int
+	closed      []string // client order ids of sells
+	baseBalance float64  // BaseBalance() answer for spot sells
 }
+
+func (f *fakeExec) BaseBalance(context.Context) (float64, error) { return f.baseBalance, nil }
 
 func (f *fakeExec) Buy(_ context.Context, budget int64, id string) (*execution.Fill, error) {
 	f.buys = append(f.buys, budget)
