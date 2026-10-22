@@ -43,6 +43,18 @@ type Config struct {
 	Symbols []string
 	// MaxOpenPositions caps concurrent open positions across all symbols.
 	MaxOpenPositions int
+
+	// Exit plan. The defaults reproduce the protection the live binary ran
+	// with: arm the trail once a position is +150 bps, trail 100 bps behind
+	// the peak in 10 bps steps, take half off at +100 bps, and close anything
+	// still under +50 bps after 20 minutes.
+	TrailActivateBps int
+	TrailDistanceBps int
+	TrailStepBps     int
+	TrailPartialBps  int
+	TrailPartialFrac float64
+	TimeStopMinutes  int
+	TimeStopMinBps   int
 	// Brain gate: BRAIN_MIN_SCORE (0 = off) is the multi-factor score bar a
 	// buy signal must clear; BRAIN_COOLDOWN_MIN pauses a symbol after a
 	// losing cycle.
@@ -88,6 +100,11 @@ type Config struct {
 	// POLYESTER_API_URL / POLYESTER_WS_URL (for example to run on devnet).
 	APIURL string
 	WSURL  string
+
+	// ShadowOnly records approved signals and their outcomes but never sends
+	// an order. It is how the bot earns the right to trade: run with it until
+	// the edge report shows positive net expectancy, then turn it off.
+	ShadowOnly bool
 }
 
 // FromEnv builds configuration. dotenvPaths are consulted (first match wins)
@@ -135,6 +152,13 @@ func FromEnv(dotenvPaths ...string) (*Config, error) {
 		PaperStartQuote:   get("PAPER_START_QUOTE"),
 		PriceScale:        intFrom(get, "POLYESTER_PRICE_SCALE", 0),
 		MaxOpenPositions:  intFrom(get, "MAX_OPEN_POSITIONS", 4),
+		TrailActivateBps:  intFrom(get, "TRAIL_ACTIVATE_BPS", 150),
+		TrailDistanceBps:  intFrom(get, "TRAIL_DISTANCE_BPS", 100),
+		TrailStepBps:      intFrom(get, "TRAIL_STEP_BPS", 10),
+		TrailPartialBps:   intFrom(get, "TRAIL_PARTIAL_BPS", 100),
+		TrailPartialFrac:  floatFrom(get, "TRAIL_PARTIAL_FRAC", 0.50),
+		TimeStopMinutes:   intFrom(get, "TIME_STOP_MINUTES", 20),
+		TimeStopMinBps:    intFrom(get, "TIME_STOP_MIN_BPS", 50),
 		BrainMinScore:     floatFrom(get, "BRAIN_MIN_SCORE", 60),
 		BrainCooldownMin:  floatFrom(get, "BRAIN_COOLDOWN_MIN", 10),
 		EnsembleThreshold: floatFrom(get, "ENSEMBLE_THRESHOLD", 0.5),
@@ -147,6 +171,7 @@ func FromEnv(dotenvPaths ...string) (*Config, error) {
 	if c.WSURL == "" {
 		c.WSURL = DefaultWSURL
 	}
+	c.ShadowOnly = boolFrom(get, "SHADOW_ONLY", false)
 	c.MaxSlippageBps = int32(intFrom(get, "MAX_SLIPPAGE_BPS", 50))
 	c.FlattenOn = true
 	if v := get("FLATTEN_ON_SHUTDOWN"); v != "" {
@@ -327,4 +352,19 @@ func floatFrom(get func(string) string, key string, def float64) float64 {
 		return def
 	}
 	return f
+}
+
+// boolFrom parses the usual truthy spellings. Anything unrecognised falls back
+// to def so a typo in .env cannot silently arm a mode the user did not mean.
+func boolFrom(get func(string) string, key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(get(key))) {
+	case "":
+		return def
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }

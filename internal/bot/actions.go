@@ -68,20 +68,20 @@ func (b *Bot) onClosedCandle(s *symRT, cc market.ClosedCandle) {
 		if b.brain.Enabled() {
 			if cooling, wait := b.brain.CoolingDown(s.symbol, time.Now()); cooling {
 				b.log.Printf("[BRAIN] %s buy vetoed: cooling down %.0fs after a loss", s.symbol, wait.Seconds())
-				b.shadowSignal(s, *buy, 0, "cooldown", regime)
+				b.shadowSignal(s, cc.TsSec, *buy, 0, "cooldown", regime)
 				return
 			}
 			verdict = b.brain.Evaluate(s.symbol, s.window, true, 0, 0)
 			if !verdict.Buy {
 				b.log.Printf("[BRAIN] %s buy VETOED: %s", s.symbol, verdict.Reason)
-				b.shadowSignal(s, *buy, verdict.Score, "vetoed", regime)
+				b.shadowSignal(s, cc.TsSec, *buy, verdict.Score, "vetoed", regime)
 				return
 			}
 			b.log.Printf("[BRAIN] %s buy approved (%s) sizing %.2fx", s.symbol, verdict.Reason, verdict.Sizing)
 			b.sizingOverride = verdict.Sizing
-			b.shadowSignal(s, *buy, verdict.Score, "approved", regime)
+			b.shadowSignal(s, cc.TsSec, *buy, verdict.Score, "approved", regime)
 		} else {
-			b.shadowSignal(s, *buy, -1, "brain-off", regime)
+			b.shadowSignal(s, cc.TsSec, *buy, -1, "brain-off", regime)
 		}
 		b.handleBuy(s, buy.Strategy, verdict.Score, string(verdict.Regime))
 		return
@@ -104,6 +104,11 @@ func (b *Bot) onClosedCandle(s *symRT, cc market.ClosedCandle) {
 func (b *Bot) handleBuy(s *symRT, stratName string, signalScore float64, signalRegime string) {
 	if s.pos != nil {
 		b.log.Printf("[EXEC] %s buy skipped: position already open", s.symbol)
+		return
+	}
+	// Shadow mode: record what the approved trade would have done, send nothing.
+	if b.cfg.ShadowOnly {
+		b.log.Printf("[SHADOW] %s would open (score %.1f, %s): shadow-only, no order sent", s.symbol, signalScore, stratName)
 		return
 	}
 	// Fail closed: without a fresh balance reading the daily-loss guard cannot
@@ -456,6 +461,15 @@ func (b *Bot) onTrade(s *symRT, t models.MarketTrade) {
 		return
 	}
 
+	// Exit plan: partial take-profit, trailing stop, time stop. Runs before the
+	// paper trigger loop because it may close the position outright.
+	if s.pos != nil {
+		b.managePosition(s, priceScaled6)
+		if s.pos == nil {
+			return
+		}
+	}
+
 	if s.paperEx == nil {
 		return
 	}
@@ -784,22 +798,32 @@ type shadowEntry struct {
 	score    float64
 	regime   string
 	price    float64
+	tsSec    int64   // signal candle timestamp (alignment key for analysis)
+	bid      float64 // book at signal time: a long enters at the ask
+	ask      float64
 	age      int
 	written  map[int]bool
 }
 
 // shadowSignal records a buy signal (approved or vetoed) for shadow tracking.
-func (b *Bot) shadowSignal(s *symRT, v strategy.Vote, score float64, status string, regime strategy.Regime) {
+func (b *Bot) shadowSignal(s *symRT, tsSec int64, v strategy.Vote, score float64, status string, regime strategy.Regime) {
+	bid, ask := bookTop(s)
 	s.shadow = append(s.shadow, shadowEntry{
 		symbol: s.symbol, strategy: v.Strategy, approved: status == "approved",
-		score: score, regime: string(regime), price: s.mark, age: 0,
-		written: map[int]bool{},
+		score: score, regime: string(regime), price: s.mark, tsSec: tsSec,
+		bid: bid, ask: ask, age: 0, written: map[int]bool{},
 	})
 }
 
 // shadowTick advances shadow entries on each closed candle and writes
-// outcomes (+1/+3/+10 candles) to signals.csv.
+// outcomes (+1/+3/+10 candles) to signals-v2.csv.
+//
+// Two returns are recorded per outcome: ret_bps is mark-to-mark (comparable
+// with the legacy signals.csv), ret_net_bps is the round trip a real position
+// would earn — enter at the ask seen when the signal fired, exit at the bid
+// seen now. The gap between them is the spread the bot actually pays.
 func (b *Bot) shadowTick(s *symRT) {
+	bidNow, askNow := bookTop(s)
 	var keep []shadowEntry
 	for _, e := range s.shadow {
 		e.age++
@@ -810,17 +834,27 @@ func (b *Bot) shadowTick(s *symRT) {
 				if e.price > 0 && s.mark > 0 {
 					retBps = (s.mark/e.price - 1) * 10000
 				}
+				netBps := 0.0
+				if e.ask > 0 && bidNow > 0 {
+					netBps = (bidNow/e.ask - 1) * 10000
+				}
 				b.signalCSV(map[string]string{
 					"ts":           time.Now().UTC().Format(time.RFC3339),
+					"signal_ts":    time.Unix(e.tsSec, 0).UTC().Format(time.RFC3339),
 					"symbol":       s.symbol,
 					"strategy":     e.strategy,
 					"approved":     fmt.Sprintf("%t", e.approved),
 					"score":        fmt.Sprintf("%.1f", e.score),
 					"regime":       e.regime,
 					"signal_price": fmt.Sprintf("%.8g", e.price),
+					"bid_signal":   fmt.Sprintf("%.8g", e.bid),
+					"ask_signal":   fmt.Sprintf("%.8g", e.ask),
 					"horizon":      strconv.Itoa(horizon),
 					"ret_bps":      fmt.Sprintf("%.1f", retBps),
+					"ret_net_bps":  fmt.Sprintf("%.1f", netBps),
 					"mark_now":     fmt.Sprintf("%.8g", s.mark),
+					"bid_now":      fmt.Sprintf("%.8g", bidNow),
+					"ask_now":      fmt.Sprintf("%.8g", askNow),
 				})
 			}
 		}
@@ -858,9 +892,13 @@ func (b *Bot) tradeCSV(row map[string]string) {
 	w.Flush()
 }
 
-// signalCSV appends one shadow-signal outcome row.
+// signalCSV appends one shadow-signal outcome row to signals-v2.csv.
+//
+// v2 adds the signal candle timestamp and the book at signal/exit time, so an
+// offline report can tell edge from spread instead of trusting a mark-to-mark
+// number that a delayed mark can bias. The legacy file is left untouched.
 func (b *Bot) signalCSV(row map[string]string) {
-	path := b.cfg.StateDir + "/signals.csv"
+	path := b.cfg.StateDir + "/signals-v2.csv"
 	writeHeader := false
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		writeHeader = true
@@ -872,11 +910,13 @@ func (b *Bot) signalCSV(row map[string]string) {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	if writeHeader {
-		w.Write([]string{"ts", "symbol", "strategy", "approved", "score", "regime",
-			"signal_price", "horizon", "ret_bps", "mark_now"})
+		w.Write([]string{"ts", "signal_ts", "symbol", "strategy", "approved", "score", "regime",
+			"signal_price", "bid_signal", "ask_signal", "horizon", "ret_bps", "ret_net_bps",
+			"mark_now", "bid_now", "ask_now"})
 	}
-	w.Write([]string{row["ts"], row["symbol"], row["strategy"], row["approved"], row["score"],
-		row["regime"], row["signal_price"], row["horizon"], row["ret_bps"], row["mark_now"]})
+	w.Write([]string{row["ts"], row["signal_ts"], row["symbol"], row["strategy"], row["approved"],
+		row["score"], row["regime"], row["signal_price"], row["bid_signal"], row["ask_signal"],
+		row["horizon"], row["ret_bps"], row["ret_net_bps"], row["mark_now"], row["bid_now"], row["ask_now"]})
 	w.Flush()
 }
 
