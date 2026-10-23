@@ -88,6 +88,11 @@ type Bot struct {
 
 	// reconFailAt throttles per-symbol reconcile failures (loop-owned).
 	reconFailAt map[string]time.Time
+
+	// exitBlockUntil suppresses repeated exit attempts after a failed sell: a
+	// venue that rejects the sell would otherwise be retried every candle, and
+	// each attempt risks another reservation (loop-owned).
+	exitBlockUntil map[string]time.Time
 }
 
 // Run builds and runs a bot until ctx is cancelled.

@@ -102,6 +102,11 @@ func (b *Bot) managePosition(s *symRT, priceScaled6 int64) {
 	if pos == nil || pos.AvgEntryScaled6 <= 0 || priceScaled6 <= 0 {
 		return
 	}
+	// A failed sell is not retried every candle: each attempt can lock more
+	// balance at the venue, so give the previous attempt time to resolve.
+	if b.exitBlocked(s.symbol) {
+		return
+	}
 	cfg := b.exitCfg()
 	if priceScaled6 > pos.PeakScaled6 {
 		pos.PeakScaled6 = priceScaled6
@@ -178,4 +183,24 @@ func (b *Bot) takePartial(s *symRT, pos *state.Position) {
 		pos.SLPriceScaled6 = sl.PriceScaled6
 	}
 	s.pos = pos
+}
+
+// exitRetryCooldown bounds how often a failed exit is retried. Retrying every
+// candle while the venue rejects sells is what turns one stuck order into a
+// pile of reservations.
+const exitRetryCooldown = 3 * time.Minute
+
+// exitBlocked reports whether this symbol's exit attempts are paused.
+func (b *Bot) exitBlocked(symbol string) bool {
+	until, ok := b.exitBlockUntil[symbol]
+	return ok && time.Now().Before(until)
+}
+
+// blockExit pauses exit attempts for one symbol after a failed sell.
+func (b *Bot) blockExit(symbol string, d time.Duration) {
+	if b.exitBlockUntil == nil {
+		b.exitBlockUntil = map[string]time.Time{}
+	}
+	b.exitBlockUntil[symbol] = time.Now().Add(d)
+	b.log.Printf("[EXIT] %s: exit attempts paused %s (previous sell did not complete)", symbol, d)
 }

@@ -264,6 +264,7 @@ func (b *Bot) flatten(s *symRT, reason string) {
 		if _, rerr := b.rearmSL(s, pos.BaseQtyScaled, pos.AvgEntryScaled6); rerr != nil {
 			b.log.Printf("[EXEC] CRITICAL: %s re-arm after failed sell also failed (%v)", s.symbol, rerr)
 		}
+		b.blockExit(s.symbol, exitRetryCooldown)
 		return
 	}
 	if remaining > 0 {

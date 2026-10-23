@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"io"
+	"log"
 	"testing"
 	"time"
 )
@@ -93,5 +95,25 @@ func TestBpsBetween(t *testing.T) {
 	}
 	if got := bpsBetween(0, 1_010_000); got != 0 {
 		t.Fatalf("entry 0 must not divide: got %v", got)
+	}
+}
+
+// A failed sell must not be retried every candle: the block is per symbol and
+// expires on its own so a recovered venue is retried without a restart.
+func TestExitBlockCooldown(t *testing.T) {
+	b := &Bot{log: log.New(io.Discard, "", 0)}
+	if b.exitBlocked("HYPE-USDT") {
+		t.Fatal("nothing should be blocked initially")
+	}
+	b.blockExit("HYPE-USDT", time.Minute)
+	if !b.exitBlocked("HYPE-USDT") {
+		t.Fatal("symbol should be blocked")
+	}
+	if b.exitBlocked("LTC-USDT") {
+		t.Fatal("block must not leak to other symbols")
+	}
+	b.blockExit("HYPE-USDT", -time.Second)
+	if b.exitBlocked("HYPE-USDT") {
+		t.Fatal("expired block must release")
 	}
 }
