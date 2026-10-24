@@ -64,14 +64,14 @@ func main() {
 	if err != nil { fmt.Println("open:", err) } else {
 		fmt.Printf("=== order terbuka: %d ===\n", len(open.Orders))
 		for _, o := range open.Orders {
-			fmt.Printf("sym %d %s status=%s orig=%s cum=%s price=%s\n", o.SymbolID, o.Side, o.Status, o.OrigQty, o.CumQty, o.Price)
+			fmt.Printf("sym %d %s status=%s orig=%+v cum=%+v price=%+v\n", o.SymbolID, o.Side, o.Status, o.OrigQty, o.CumQty, o.Price)
 		}
 	}
 	hist, err := client.Orders.ListHistory(ctx, nil, nil, nil, nil, nil, 15, false, false, nil)
 	if err != nil { fmt.Println("history:", err) } else {
 		fmt.Println("=== 15 order terakhir ===")
 		for _, o := range hist.Orders {
-			fmt.Printf("sym %d %s status=%-8s orig=%s cum=%s avgpx=%s\n", o.SymbolID, o.Side, o.Status, o.OrigQty, o.CumQty, o.AvgPx)
+			fmt.Printf("sym %d %s status=%-8s orig=%+v cum=%+v avgpx=%+v\n", o.SymbolID, o.Side, o.Status, o.OrigQty, o.CumQty, o.AvgPx)
 		}
 	}
 }

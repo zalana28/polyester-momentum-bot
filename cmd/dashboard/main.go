@@ -270,8 +270,8 @@ func main() {
 				need = "naik"
 			}
 			line(fmt.Sprintf("  ║  ⏳ MENUNGGU DIP %s", lv.Symbol) + cReset)
-			line(fmt.Sprintf("  ║  order @ %s.g | pasar @ %s.g | butuh %s %s%.0f bps",
-				cYel, lv.OrderPrice, cReset, lv.Mid, cCyn, need, cReset, MathAbs(lv.DistBps)) + cReset)
+			line(fmt.Sprintf("  ║  order @ %s%.6g%s | pasar @ %s%.6g%s | butuh %s%.0f bps%s",
+				cYel, lv.OrderPrice, cReset, cCyn, lv.Mid, cReset, cYel, MathAbs(lv.DistBps), cReset) + cReset)
 			line("  ║  maker sabar menunggu harga turun ke order...              " + cReset)
 		case lvFresh && lv.Phase == "HOLD":
 			unrl := (lv.Mid - lv.Entry) * lv.Qty
@@ -279,8 +279,8 @@ func main() {
 			if unrl < 0 {
 				uc = cRed
 			}
-			line(fmt.Sprintf("  ║  💼 PEGANG %s  qty %s.g @ %s.g", lv.Symbol, lv.Qty, lv.Entry) + cReset)
-			line(fmt.Sprintf("  ║  mid %s.g | TP %s.g | SL %s.g | P/L mengambang %s$%+.2f%s",
+			line(fmt.Sprintf("  ║  💼 PEGANG %s  qty %.6g @ %.6g", lv.Symbol, lv.Qty, lv.Entry) + cReset)
+			line(fmt.Sprintf("  ║  mid %.6g | TP %.6g | SL %.6g | P/L mengambang %s$%+.2f%s",
 				lv.Mid, lv.Target, lv.Sl, uc, unrl, cReset) + cReset)
 		case lvFresh:
 			line("  ║  fase: " + lv.Phase + " " + lv.Symbol + "                                        " + cReset)

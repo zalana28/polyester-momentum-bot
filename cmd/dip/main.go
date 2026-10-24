@@ -91,6 +91,35 @@ func strPtr(s string) *string { return &s }
 
 func f6(v int64) string { return num.FormatScaled(v, 6) }
 
+// priceFresh: oracle kesegaran harga — bandingkan mid orderbook dgn close
+// candle 1m terakhir (endpoint berbeda). Kembalikan false bila deviasi melebihi
+// PRICE_FRESH_MAX_DEV_BPS -> keputusan market (TP/SL-bot/momentum entry)
+// DITUNDA sampai harga terbukti segar. Pelajaran: bookTop bisa stale berjam-jam.
+func priceFresh(ctx context.Context, symbol string, info pairInfo, mid float64) (bool, string) {
+	sym := symbol
+	res, err := client.MarketData.GetCandles(ctx, &sym, nil, "1m", 2, nil, nil, false)
+	if err != nil {
+		return false, "candle error: " + err.Error()
+	}
+	if len(res.Candles) == 0 {
+		return false, "candle kosong"
+	}
+	cl, e := strconv.ParseFloat(res.Candles[len(res.Candles)-1].Close, 64)
+	if e != nil {
+		return false, "candle parse error"
+	}
+	cl = cl / math.Pow10(int(info.WireShift))
+	if cl <= 0 {
+		return false, "candle close 0"
+	}
+	dev := math.Abs(mid-cl) / cl * 10000
+	max := envF("PRICE_FRESH_MAX_DEV_BPS", 150)
+	if dev > max {
+		return false, fmt.Sprintf("deviasi %.0f bps (mid %.6g vs candle1m %.6g)", dev, mid, cl)
+	}
+	return true, fmt.Sprintf("dev %.0f bps", dev)
+}
+
 // writeLive menulis status real-time utk dashboard TUI (state-dip/live.json)
 func writeLive(phase, symbol string, extra map[string]any) {
 	m := map[string]any{"ts": time.Now().Unix(), "phase": phase, "symbol": symbol}
@@ -384,9 +413,14 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 				"target": float64(targetS6) / 1e6, "sl": float64(slPrice) / 1e6,
 				"qty": float64(filledS6) / math.Pow10(int(info.BaseScale))})
 			if mid >= float64(targetS6)/1e6 {
-				lf("TP kena (mid >= %s) — market exit", f6(targetS6))
-				cancelTrigger(slID)
-				return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
+				ok, why := priceFresh(ctx, symbol, info, mid)
+				if !ok {
+					lf("TP tertunda — harga TIDAK SEGAR (%s), tunggu konfirmasi", why)
+				} else {
+					lf("TP kena (mid >= %s, %s) — market exit", f6(targetS6), why)
+					cancelTrigger(slID)
+					return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
+				}
 			}
 		}
 		// SL server-side melindungi; kalau trigger gagal dipasang, watchdog bot
@@ -394,8 +428,13 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 		if slID == "" {
 			if b2, a2, berr := bookTop(ctx, info); berr == nil {
 				if (b2+a2)/2 <= float64(slPrice)/1e6 {
-					lf("SL bot-side (server SL tak tersedia) — market exit")
-					return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
+					ok, why := priceFresh(ctx, symbol, info, (b2+a2)/2)
+					if !ok {
+						lf("SL bot tertunda — harga TIDAK SEGAR (%s)", why)
+					} else {
+						lf("SL bot-side (server SL tak tersedia, %s) — market exit", why)
+						return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
+					}
 				}
 			}
 		}
