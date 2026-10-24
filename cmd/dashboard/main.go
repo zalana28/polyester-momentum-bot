@@ -270,8 +270,8 @@ func main() {
 			if lv.DistBps < 0 {
 				dir = "naik"
 			}
-			line(fmt.Sprintf("  ║  order @ %s%.6g%s | pasar @ %s%.6g%s | butuh %s %.0f bps%s",
-				cYel, lv.OrderPrice, cReset, cCyn, lv.Mid, cReset, cYel, dir, MathAbs(lv.DistBps), cReset) + cReset)
+			line(fmt.Sprintf("  ║  order @ %s%.6g%s | pasar @ %s%.6g%s | butuh %s %v bps%s",
+				cYel, lv.OrderPrice, cReset, cCyn, lv.Mid, cReset, dir, MathAbs(lv.DistBps), cReset) + cReset)
 			line("  ║  maker sabar menunggu harga turun ke order...              " + cReset)
 		case lvFresh && lv.Phase == "HOLD":
 			unrl := (lv.Mid - lv.Entry) * lv.Qty
