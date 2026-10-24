@@ -265,13 +265,13 @@ func main() {
 		line(cBold + cMag + "  ╠══════════════════════════ BOT LIVE ════════════════════════╣" + cReset)
 		switch {
 		case lvFresh && lv.Phase == "WAIT_BUY":
-			need := "turun"
-			if lv.DistBps < 0 {
-				need = "naik"
-			}
 			line(fmt.Sprintf("  ║  ⏳ MENUNGGU DIP %s", lv.Symbol) + cReset)
-			line(fmt.Sprintf("  ║  order @ %s%.6g%s | pasar @ %s%.6g%s | butuh %s%.0f bps%s",
-				cYel, lv.OrderPrice, cReset, cCyn, lv.Mid, cReset, cYel, MathAbs(lv.DistBps), cReset) + cReset)
+			dir := "turun"
+			if lv.DistBps < 0 {
+				dir = "naik"
+			}
+			line(fmt.Sprintf("  ║  order @ %s%.6g%s | pasar @ %s%.6g%s | butuh %s %.0f bps%s",
+				cYel, lv.OrderPrice, cReset, cCyn, lv.Mid, cReset, cYel, dir, MathAbs(lv.DistBps), cReset) + cReset)
 			line("  ║  maker sabar menunggu harga turun ke order...              " + cReset)
 		case lvFresh && lv.Phase == "HOLD":
 			unrl := (lv.Mid - lv.Entry) * lv.Qty
