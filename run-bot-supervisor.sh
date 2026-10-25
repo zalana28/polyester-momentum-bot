@@ -35,10 +35,19 @@ while true; do
       # konfirmasi ganda: 1x baca bisa basi/0 palsu — cek ulang 15 dtk
       echo "[$(date -u +%H:%M:%S)] saldo rendah ($free) — konfirmasi ulang 15s" >> logs/supervisor.log
       sleep 15
-      free2=$(./bin/freeusdt 2>/dev/null | tail -1)
-      ok2=$(awk -v f="$free2" -v m="$MINFREE" 'BEGIN{print (f>=m)?1:0}')
+      # percaya "habis" hanya setelah upaya pemulihan inventory berulang:
+      # posisi nyangkut yang gagal dijual pertama kali sering laku di retry kedua
+      for r in 1 2 3; do
+        for p in ${(s:,:)PAIRS}; do
+          MAX_SLIPPAGE_BPS=200 ./bin/sell "$p" >/dev/null 2>&1
+        done
+        sleep 8
+        free2=$(./bin/freeusdt 2>/dev/null | tail -1)
+        ok2=$(awk -v f="$free2" -v m="$MINFREE" 'BEGIN{print (f>=m)?1:0}')
+        [ "$ok2" = "1" ] && break
+      done
       if [ "$free2" != "ERR" ] && [ "$ok2" != "1" ]; then
-        echo "[$(date -u +%H:%M:%S)] SALDO HABIS terkonfirmasi ($free2) — berhenti. PERLU FAUCET." >> logs/supervisor.log
+        echo "[$(date -u +%H:%M:%S)] SALDO HABIS terkonfirmasi ($free2, inventory habis dijual) — PERLU FAUCET." >> logs/supervisor.log
         break
       fi
       free="$free2"
