@@ -26,12 +26,24 @@ while true; do
   done
   if [ "$MODE" = "vip" ]; then
     free=$(./bin/freeusdt 2>/dev/null | tail -1)
-    echo "[$(date -u +%H:%M:%S)] dana bebas: $free (min $MINFREE)" >> logs/supervisor.log
+    if [ "$free" = "ERR" ]; then
+      echo "[$(date -u +%H:%M:%S)] baca saldo gagal — coba lagi 20s" >> logs/supervisor.log
+      sleep 20; continue
+    fi
     ok=$(awk -v f="$free" -v m="$MINFREE" 'BEGIN{print (f>=m)?1:0}')
     if [ "$ok" != "1" ]; then
-      echo "[$(date -u +%H:%M:%S)] SALDO HABIS — berhenti. PERLU FAUCET TOP-UP." >> logs/supervisor.log
-      break
+      # konfirmasi ganda: 1x baca bisa basi/0 palsu — cek ulang 15 dtk
+      echo "[$(date -u +%H:%M:%S)] saldo rendah ($free) — konfirmasi ulang 15s" >> logs/supervisor.log
+      sleep 15
+      free2=$(./bin/freeusdt 2>/dev/null | tail -1)
+      ok2=$(awk -v f="$free2" -v m="$MINFREE" 'BEGIN{print (f>=m)?1:0}')
+      if [ "$free2" != "ERR" ] && [ "$ok2" != "1" ]; then
+        echo "[$(date -u +%H:%M:%S)] SALDO HABIS terkonfirmasi ($free2) — berhenti. PERLU FAUCET." >> logs/supervisor.log
+        break
+      fi
+      free="$free2"
     fi
+    echo "[$(date -u +%H:%M:%S)] dana bebas: $free (min $MINFREE)" >> logs/supervisor.log
     CHURN_SKIP_PREVIEW=1 CHURN_SYMBOLS="$PAIRS" CHURN_BUDGET="$BUDGET" CHURN_CYCLES=1000000 CHURN_REST_SEC="$REST" \
       ./bin/pmom-churn >> logs/churn-vip.log 2>&1
     echo "[$(date -u +%H:%M:%S)] churn keluar (code $?) — self-heal 15s" >> logs/supervisor.log

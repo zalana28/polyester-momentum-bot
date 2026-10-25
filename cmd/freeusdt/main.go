@@ -13,6 +13,12 @@ import (
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
 )
 
+func parseFloat(s string) float64 {
+	var f float64
+	fmt.Sscan(s, &f)
+	return f
+}
+
 func main() {
 	raw, _ := os.ReadFile("/Users/jazeerahusna/.zcode/workspace/default/polyester-momentum-bot/.env")
 	var kid, priv string
@@ -24,18 +30,24 @@ func main() {
 	env := chain.PolyesterTestnetEnvironment
 	env.APIURL = "https://api.testnet.polyester.com"
 	client, err := polyester.New(polyester.Config{Environment: &env, APIURL: env.APIURL, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
-	if err != nil { fmt.Println("0"); os.Exit(1) }
+	if err != nil { fmt.Println("ERR"); os.Exit(1) }
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	bal, err := client.Balances.List(ctx, nil, nil)
-	if err != nil { fmt.Println("0"); os.Exit(1) }
-	for _, b := range bal.Balances {
-		if b.AssetID == 1 {
-			s, _ := codecs.FormatLedgerU128(b.Available, codecs.LedgerScale)
-			fmt.Println(s)
-			return
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		bal, err := client.Balances.List(ctx, nil, nil)
+		if err == nil {
+			for _, b := range bal.Balances {
+				if b.AssetID == 1 {
+					s, _ := codecs.FormatLedgerU128(b.Available, codecs.LedgerScale)
+					if f := parseFloat(s); f > 1 { // sanity: baca nyata
+						fmt.Println(s)
+						cancel(); return
+					}
+				}
+			}
 		}
+		cancel()
+		time.Sleep(4 * time.Second)
 	}
-	fmt.Println("0")
+	fmt.Println("ERR")
 }
