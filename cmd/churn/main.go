@@ -27,6 +27,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	polyesterchain "github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 
 	"polyester-momentum-bot/internal/execution"
@@ -42,17 +43,22 @@ func (stdoutJournal) Append(e execution.Entry) error {
 }
 
 func main() {
+	// Domain API baru (Des 2026)
+	churnEnv := polyesterchain.PolyesterTestnetEnvironment
+	churnEnv.APIURL = "https://api.testnet.polyester.com"
+	churnEnv.WebsocketURL = "wss://api.testnet.polyester.com/ws"
+
 	budgetF := envF("CHURN_BUDGET", 55)
 	cycles := int(envF("CHURN_CYCLES", 15))
 	rest := time.Duration(envF("CHURN_REST_SEC", 2)) * time.Second
-	symbolsRaw := strings.ToUpper(strings.TrimSpace(os.Getenv("SYMBOLS")))
+	symbolsRaw := strings.ToUpper(strings.TrimSpace(os.Getenv("CHURN_SYMBOLS")))
 	if symbolsRaw == "" {
 		symbolsRaw = "all"
 	}
 
 	kid, priv := readCreds()
 	client, err := polyester.New(polyester.Config{
-		Environment: &polyester.TestnetEnvironment, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
+		Environment: &churnEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
 	})
 	if err != nil {
 		fmt.Println("client:", err)
