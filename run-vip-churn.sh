@@ -10,7 +10,10 @@ while true; do
   fi
   ./bin/cancelown >/dev/null 2>&1
   for p in USDC-USDT LTC-USDT BTC-USDT; do
-    MAX_SLIPPAGE_BPS=200 ./bin/sell "$p" >/dev/null 2>&1
+    for t in 1 2 3 4 5; do
+      if MAX_SLIPPAGE_BPS=200 ./bin/sell "$p" >/dev/null 2>&1; then break; fi
+      sleep 4
+    done
   done
   echo "[$(date -u +%H:%M:%S)] DNS OK — inventory dibersihkan, churn mulai"
   CHURN_SYMBOLS="USDC-USDT,LTC-USDT,BTC-USDT" CHURN_BUDGET=1000 CHURN_CYCLES=1000000 CHURN_REST_SEC=2 ./bin/pmom-churn >> logs/churn-vip.log 2>&1
