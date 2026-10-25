@@ -12,6 +12,7 @@ import (
 
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 )
 
@@ -42,7 +43,9 @@ func main() {
 		wireSh   = 9 // empiris: avgpx ticks 91838000000 = true6 91838000 x1000
 	)
 	kid, priv := creds()
-	client, err := polyester.New(polyester.Config{Environment: &polyester.TestnetEnvironment, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
+	toolEnv := chain.PolyesterTestnetEnvironment
+	toolEnv.APIURL = "https://api.testnet.polyester.com"
+	client, err := polyester.New(polyester.Config{Environment: &toolEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
 	if err != nil { fmt.Println("client:", err); os.Exit(1) }
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

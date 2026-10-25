@@ -16,6 +16,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 
 	"polyester-momentum-bot/internal/execution"
@@ -39,8 +40,10 @@ func main() {
 	symbol := strings.ToUpper(os.Args[1])
 
 	kid, priv := readCreds()
+	toolEnv := chain.PolyesterTestnetEnvironment
+	toolEnv.APIURL = "https://api.testnet.polyester.com"
 	client, err := polyester.New(polyester.Config{
-		Environment: &polyester.TestnetEnvironment, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
+		Environment: &toolEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
 	})
 	if err != nil {
 		fmt.Println("client:", err)

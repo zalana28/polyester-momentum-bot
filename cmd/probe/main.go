@@ -8,6 +8,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 )
 
 func creds() (string, string) {
@@ -27,7 +28,9 @@ func creds() (string, string) {
 
 func main() {
 	kid, priv := creds()
-	client, err := polyester.New(polyester.Config{Environment: &polyester.TestnetEnvironment, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
+	probeEnv := chain.PolyesterTestnetEnvironment
+	probeEnv.APIURL = "https://api.testnet.polyester.com"
+	client, err := polyester.New(polyester.Config{Environment: &probeEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
 	if err != nil { fmt.Println("client:", err); os.Exit(1) }
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

@@ -101,6 +101,7 @@ func main() {
 	fmt.Println("(Ctrl+C untuk berhenti — siklus berjalan terus: 15 siklus -> jeda -> ulangi)")
 
 	var totalPnL float64
+	noFunds := 0
 	startWall := time.Now()
 	seq := 0
 	for batch := 1; ; batch++ {
@@ -132,22 +133,51 @@ func main() {
 			buy, err := exec.Buy(ctx, budget, coid+"-b")
 			if err != nil {
 				fmt.Printf("  BUY gagal: %v\n", err)
+				if strings.Contains(err.Error(), "INSUFFICIENT_FUNDS") {
+					noFunds++
+					if noFunds >= 30 {
+						fmt.Println("=== SALDO TIDAK CUKUP utk budget siklus — berhenti (kode 42, perlu faucet) ===")
+						os.Exit(42)
+					}
+				} else {
+					noFunds = 0
+				}
 				continue
 			}
+			noFunds = 0
 			fmt.Printf("  BUY  %s @ %s (status=%s)\n",
 				num.FormatScaled(buy.BaseQtyScaled, mi.BaseScale),
 				num.FormatScaled(buy.AvgPriceScaled6, 6), buy.Status)
 
-			sell, err := exec.Sell(ctx, buy.BaseQtyScaled, coid+"-s")
-			if err != nil {
-				if strings.Contains(err.Error(), "dust") {
+			// Sell dgn retry: preview server kadang baca saldo basi (INSUFFICIENT_FUNDS
+			// walau koin baru dibeli) — tunggu cache segar lalu coba lagi.
+			var sell *execution.Fill
+			var serr error
+			for attempt := 0; attempt < 4; attempt++ {
+				sell, serr = exec.Sell(ctx, buy.BaseQtyScaled, fmt.Sprintf("%s-s%d", coid, attempt))
+				if err == nil {
+					break
+				}
+				if serr != nil && strings.Contains(serr.Error(), "dust") {
 					fmt.Println("  sisa dust — lanjut siklus berikutnya")
+					sell = nil
+					break
+				}
+				if serr != nil && (strings.Contains(serr.Error(), "INSUFFICIENT_FUNDS") || strings.Contains(serr.Error(), "UNAVAILABLE")) {
+					fmt.Printf("  sell ditunda (%v) — retry %d/3 dalam 3s\n", serr, attempt+1)
+					time.Sleep(3 * time.Second)
 					continue
 				}
+				break
+			}
+			if sell == nil && serr != nil {
 				fmt.Printf("  SELL gagal: %v (posisi %s tersisa — jalankan cmd/sell %s untuk membersihkan)\n",
-					err, num.FormatScaled(buy.BaseQtyScaled, mi.BaseScale), symbol)
+					serr, num.FormatScaled(buy.BaseQtyScaled, mi.BaseScale), symbol)
 				done++
 				break
+			}
+			if sell == nil {
+				continue // dust: siklus dianggap selesai
 			}
 			pnl := (num.ScaledToFloat(sell.AvgPriceScaled6, 6) - num.ScaledToFloat(buy.AvgPriceScaled6, 6)) *
 				num.ScaledToFloat(buy.BaseQtyScaled, mi.BaseScale)

@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	url := "wss://api-testnet.polyester.com"
+	url := "wss://api.testnet.polyester.com"
 	if len(os.Args) > 1 {
 		url = os.Args[1]
 	}

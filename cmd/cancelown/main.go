@@ -11,6 +11,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 )
 
@@ -30,7 +31,9 @@ func main() {
 			priv = strings.TrimPrefix(l, "API_PRIVATE_KEY=")
 		}
 	}
-	client, err := polyester.New(polyester.Config{Environment: &polyester.TestnetEnvironment, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
+	toolEnv := chain.PolyesterTestnetEnvironment
+	toolEnv.APIURL = "https://api.testnet.polyester.com"
+	client, err := polyester.New(polyester.Config{Environment: &toolEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -60,7 +63,7 @@ func main() {
 	fmt.Printf("selesai: %d order dibatalkan (prefix %q)\n", n, prefix)
 
 	// bersihkan trigger sisa (SL/TP yatim yang mereserve dana)
-	if tg, terr := client.Triggers.List(ctx, nil, nil, nil, []string{"open"}, 50, nil); terr == nil {
+	if tg, terr := client.Triggers.List(ctx, nil, nil, nil, []string{"created", "armed"}, 50, nil); terr == nil {
 		m := 0
 		for _, t := range tg.Triggers {
 			if _, cerr := client.Triggers.Cancel(ctx, nil, t.TriggerID, nil); cerr == nil {
