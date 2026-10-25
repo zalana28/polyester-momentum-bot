@@ -58,4 +58,18 @@ func main() {
 		n++
 	}
 	fmt.Printf("selesai: %d order dibatalkan (prefix %q)\n", n, prefix)
+
+	// bersihkan trigger sisa (SL/TP yatim yang mereserve dana)
+	if tg, terr := client.Triggers.List(ctx, nil, nil, nil, []string{"open"}, 50, nil); terr == nil {
+		m := 0
+		for _, t := range tg.Triggers {
+			if _, cerr := client.Triggers.Cancel(ctx, nil, t.TriggerID, nil); cerr == nil {
+				fmt.Printf("trigger dibatalkan: %s (%s)\n", t.TriggerID, t.ClientTriggerID)
+				m++
+			}
+		}
+		fmt.Printf("trigger sisa dibatalkan: %d\n", m)
+	} else {
+		fmt.Println("triggers list:", terr)
+	}
 }
