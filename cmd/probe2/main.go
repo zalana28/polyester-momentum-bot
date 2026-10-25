@@ -29,8 +29,8 @@ func main() {
 		}
 	}
 	env := chain.PolyesterTestnetEnvironment
-	env.APIURL = "https://testnet.polyester.com"
-	env.WebsocketURL = "wss://testnet.polyester.com/ws"
+	env.APIURL = "https://api.testnet.polyester.com"
+	env.WebsocketURL = "wss://api.testnet.polyester.com/ws"
 	client, err := polyester.New(polyester.Config{
 		Environment: &env, APIURL: env.APIURL,
 		APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
@@ -42,6 +42,8 @@ func main() {
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	if err := client.WaitForCatalogs(ctx); err != nil { fmt.Println("catalogs:", err); os.Exit(1) }
+	fmt.Println("CATALOGS OK ✓")
 	fmt.Println("--- probe RPC satu per satu:")
 	bal, balErr := client.Balances.List(ctx, nil, nil)
 	if balErr != nil { fmt.Println("balances.List:", balErr) } else { fmt.Println("balances.List OK —", len(bal.Balances), "baris") }

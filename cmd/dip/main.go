@@ -36,6 +36,8 @@ import (
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
+
 	"polyester-momentum-bot/internal/brain"
 	"polyester-momentum-bot/internal/journal"
 	"polyester-momentum-bot/internal/market"
@@ -148,8 +150,12 @@ func main() {
 	defer jrnl.Close()
 
 	kid, priv := readCreds()
+	// Domain API baru (Des 2026): api.testnet.polyester.com (domain lama api-testnet NXDOMAIN)
+	dipEnv := chain.PolyesterTestnetEnvironment
+	dipEnv.APIURL = "https://api.testnet.polyester.com"
+	dipEnv.WebsocketURL = "wss://api.testnet.polyester.com/ws"
 	client, err = polyester.New(polyester.Config{
-		Environment:     &polyester.TestnetEnvironment,
+		Environment:     &dipEnv,
 		APIKeyID:        kid,
 		APIPrivateKey:   priv,
 		HydrateCatalogs: true,
