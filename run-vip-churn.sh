@@ -16,7 +16,7 @@ while true; do
     done
   done
   echo "[$(date -u +%H:%M:%S)] DNS OK — inventory dibersihkan, churn mulai"
-  CHURN_SKIP_PREVIEW=1 CHURN_SYMBOLS="USDC-USDT,LTC-USDT,BTC-USDT" CHURN_BUDGET=1000 CHURN_CYCLES=1000000 CHURN_REST_SEC=2 ./bin/pmom-churn >> logs/churn-vip.log 2>&1
+  CHURN_SKIP_PREVIEW=1 CHURN_SYMBOLS="USDC-USDT,LTC-USDT,BTC-USDT" CHURN_BUDGET=1000 CHURN_CYCLES=1000000 CHURN_REST_SEC=4 ./bin/pmom-churn >> logs/churn-vip.log 2>&1
   code=$?
   if [ "$code" = "42" ]; then
     echo "[$(date -u +%H:%M:%S)] SALDO HABIS — churn berhenti permanen. PERLU FAUCET TOP-UP." >> logs/vip-supervisor.log

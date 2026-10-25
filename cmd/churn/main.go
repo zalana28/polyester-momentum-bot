@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strconv"
@@ -50,7 +51,7 @@ func main() {
 
 	budgetF := envF("CHURN_BUDGET", 55)
 	cycles := int(envF("CHURN_CYCLES", 15))
-	rest := time.Duration(envF("CHURN_REST_SEC", 2)) * time.Second
+	rest := time.Duration(envF("CHURN_REST_SEC", 4)) * time.Second
 	symbolsRaw := strings.ToUpper(strings.TrimSpace(os.Getenv("CHURN_SYMBOLS")))
 	if symbolsRaw == "" {
 		symbolsRaw = "all"
@@ -192,7 +193,9 @@ func main() {
 			done++
 
 			if i < cycles-1 {
-				time.Sleep(rest)
+				// jeda acak 4-7 dtk setelah trade selesai (ramah API)
+			jitter := time.Duration(rand.Intn(4)) * time.Second
+			time.Sleep(rest + jitter)
 			}
 		}
 		batchEndUSDT := quoteBalance(ctx, client, 1)
