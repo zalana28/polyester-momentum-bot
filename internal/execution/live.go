@@ -43,6 +43,7 @@ type LiveExecutor struct {
 	deadManSecs    int
 	fillWait       time.Duration
 	maxRateRetries int
+	skipPreview    bool
 
 	markMu      sync.RWMutex
 	mark        float64   // true price (quote units per base)
@@ -184,7 +185,14 @@ func (l *LiveExecutor) baseQty(scaled int64) models.QtyInput {
 // preview runs Orders.Preview per the SDK contract: real rejections abort the
 // create; an unavailable preview host or transport noise continues (create is
 // authoritative and re-evaluates).
+// SetSkipPreview menonaktifkan pre-flight preview (churn/VIP mode) — create
+// tetap divalidasi server-side.
+func (l *LiveExecutor) SetSkipPreview(on bool) { l.skipPreview = on }
+
 func (l *LiveExecutor) preview(ctx context.Context, req models.CreateOrderRequest, side string) error {
+	if l.skipPreview {
+		return nil // churn mode: create bersifat authoritative; server menolak sendiri jika dana kurang
+	}
 	pv, err := l.client.Orders.Preview(ctx, req, nil)
 	switch {
 	case err == nil:

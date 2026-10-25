@@ -128,11 +128,15 @@ func main() {
 				continue
 			}
 			exec := execution.NewLiveExecutor(client, mi, stdoutJournal{}, nil, 50, 15)
+			if os.Getenv("CHURN_SKIP_PREVIEW") == "1" {
+				exec.SetSkipPreview(true)
+			}
 			coid := fmt.Sprintf("pmom-churn-%d-%d", time.Now().Unix(), i)
 
 			buy, err := exec.Buy(ctx, budget, coid+"-b")
 			if err != nil {
 				fmt.Printf("  BUY gagal: %v\n", err)
+				time.Sleep(2 * time.Second)
 				if strings.Contains(err.Error(), "INSUFFICIENT_FUNDS") {
 					noFunds++
 					if noFunds >= 30 {
@@ -153,7 +157,7 @@ func main() {
 			// walau koin baru dibeli) — tunggu cache segar lalu coba lagi.
 			var sell *execution.Fill
 			var serr error
-			for attempt := 0; attempt < 4; attempt++ {
+			for attempt := 0; attempt < 10; attempt++ {
 				sell, serr = exec.Sell(ctx, buy.BaseQtyScaled, fmt.Sprintf("%s-s%d", coid, attempt))
 				if err == nil {
 					break
@@ -163,9 +167,9 @@ func main() {
 					sell = nil
 					break
 				}
-				if serr != nil && (strings.Contains(serr.Error(), "INSUFFICIENT_FUNDS") || strings.Contains(serr.Error(), "UNAVAILABLE")) {
-					fmt.Printf("  sell ditunda (%v) — retry %d/3 dalam 3s\n", serr, attempt+1)
-					time.Sleep(3 * time.Second)
+				if serr != nil && (strings.Contains(serr.Error(), "INSUFFICIENT_FUNDS") || strings.Contains(serr.Error(), "UNAVAILABLE") || strings.Contains(serr.Error(), "temporarily unavailable")) {
+					fmt.Printf("  sell ditunda (%v) — retry %d/9 dalam 5s\n", serr, attempt+1)
+					time.Sleep(5 * time.Second)
 					continue
 				}
 				break
