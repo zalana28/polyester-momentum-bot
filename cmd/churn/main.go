@@ -138,9 +138,9 @@ func main() {
 			if err != nil {
 				fmt.Printf("  BUY gagal: %v\n", err)
 				time.Sleep(2 * time.Second)
-				if strings.Contains(err.Error(), "INSUFFICIENT_FUNDS") {
+				if strings.Contains(strings.ToLower(err.Error()), "insufficient") {
 					noFunds++
-					if noFunds >= 30 {
+					if noFunds >= 10 {
 						fmt.Println("=== SALDO TIDAK CUKUP utk budget siklus — berhenti (kode 42, perlu faucet) ===")
 						os.Exit(42)
 					}
@@ -178,6 +178,10 @@ func main() {
 			if sell == nil && serr != nil {
 				fmt.Printf("  SELL gagal: %v (posisi %s tersisa — jalankan cmd/sell %s untuk membersihkan)\n",
 					serr, num.FormatScaled(buy.BaseQtyScaled, mi.BaseScale), symbol)
+				if free := quoteBalance(ctx, client, 1); free < budgetF*1.02 {
+					fmt.Printf("=== dana bebas %.2f < budget %.2f (posisi tersangkut) — exit 42 utk self-heal ===\n", free, budgetF)
+					os.Exit(42)
+				}
 				done++
 				break
 			}
