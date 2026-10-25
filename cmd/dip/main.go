@@ -213,7 +213,7 @@ func main() {
 	if dm := envI("DIP_DEADMAN_SEC", 30); dm > 0 {
 		go func() {
 			for {
-				rid := fmt.Sprintf("dm-%d", time.Now().UnixNano()%1e9)
+				rid := fmt.Sprintf("dm-%d", time.Now().UnixNano())
 				_, _ = client.Orders.CancelAllAfter(context.Background(), nil, dm, nil, nil, nil, &rid)
 				time.Sleep(5 * time.Second)
 			}
@@ -342,7 +342,7 @@ func runDipCycle(ctx context.Context, symbol string, cycleNo int, offBps int) er
 		if qtyS6 < info.MinQtyS6 || notional(qtyS6, entryS6, info) < info.MinNotional {
 			return fmt.Errorf("budget below pair minimum")
 		}
-		coidBuy := fmt.Sprintf("dip-b-%d-%d-%d", time.Now().UnixNano()%1e9, cycleNo, reprices)
+		coidBuy := fmt.Sprintf("dip-b-%d-%d-%d", time.Now().UnixNano(), cycleNo, reprices)
 		_ = jrnl.Append(jrnlEntry("buy_intent", coidBuy, map[string]string{
 			"symbol": symbol, "price": f6(entryS6), "qty": f6(qtyS6)}))
 		lf("BUY LIMIT %s @ %s (offset %dbps)", f6(qtyS6), f6(entryS6), offBps)
@@ -384,7 +384,7 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 	lf := func(format string, a ...any) {
 		logf("%s "+format, append([]any{symbol}, a...)...)
 	}
-	slCoid := fmt.Sprintf("dip-sl-%d", time.Now().UnixNano()%1e9)
+	slCoid := fmt.Sprintf("dip-sl-%d", time.Now().UnixNano())
 	slID, err := armStopLoss(ctx, symbol, slPrice, filledS6, slCoid, info)
 	if err != nil {
 		lf("WARNING SL server gagal (%v) — watchdog bot jadi lapisan satu-satunya", err)
@@ -510,7 +510,7 @@ func takerExit(ctx context.Context, symbol string, qtyS6, avgS6, targetS6 int64,
 	info := pairs[symbol]
 	qty, _ := models.NewQtyScaled(qtyS6)
 	qty = qty.WithScale(info.BaseScale).WithSymbol(symbol)
-	coid := fmt.Sprintf("dip-tk-%d", time.Now().UnixNano()%1e9)
+	coid := fmt.Sprintf("dip-tk-%d", time.Now().UnixNano())
 	if _, err := client.Orders.Create(ctx, models.CreateOrderRequest{
 		Symbol:        &symbol,
 		Side:          "sell",
@@ -1189,7 +1189,7 @@ func runMomentumCycle(ctx context.Context, symbol string, cycleNo int, info pair
 	if qtyS6 < info.MinQtyS6 || notional(qtyS6, entryS6, info) < info.MinNotional {
 		return fmt.Errorf("momentum budget below pair minimum")
 	}
-	coid := fmt.Sprintf("dip-m-%d-%d", time.Now().UnixNano()%1e9, cycleNo)
+	coid := fmt.Sprintf("dip-m-%d-%d", time.Now().UnixNano(), cycleNo)
 	_ = jrnl.Append(jrnlEntry("mom_intent", coid, map[string]string{
 		"symbol": symbol, "price": f6(entryS6), "qty": f6(qtyS6)}))
 	filledS6, avgS6, err := placeIOCBuy(ctx, symbol, entryS6, qtyS6, coid, info)
