@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
 	polyesterchain "github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 
@@ -59,7 +61,7 @@ func main() {
 
 	kid, priv := readCreds()
 	client, err := polyester.New(polyester.Config{
-		Environment: &churnEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
+		Environment: &churnEnv, APIKeyID: kid, APIPrivateKey: auth.NewSecret(priv),
 	})
 	if err != nil {
 		fmt.Println("client:", err)
@@ -138,7 +140,9 @@ func main() {
 			if err != nil {
 				fmt.Printf("  BUY gagal: %v\n", err)
 				time.Sleep(2 * time.Second)
-				if strings.Contains(strings.ToLower(err.Error()), "insufficient") {
+				// Engine 0.92.x: klasifikasi pakai kode terstruktur
+				// (execution.InsufficientFunds), bukan string mentah.
+				if execution.InsufficientFunds(err) {
 					noFunds++
 					if noFunds >= 10 {
 						fmt.Println("=== SALDO TIDAK CUKUP utk budget siklus — berhenti (kode 42, perlu faucet) ===")
@@ -160,15 +164,17 @@ func main() {
 			var serr error
 			for attempt := 0; attempt < 10; attempt++ {
 				sell, serr = exec.Sell(ctx, buy.BaseQtyScaled, fmt.Sprintf("%s-s%d", coid, attempt))
-				if err == nil {
+				if serr == nil {
 					break
 				}
-				if serr != nil && strings.Contains(serr.Error(), "dust") {
+				if errors.Is(serr, execution.ErrDust) {
 					fmt.Println("  sisa dust — lanjut siklus berikutnya")
 					sell = nil
 					break
 				}
-				if serr != nil && (strings.Contains(serr.Error(), "INSUFFICIENT_FUNDS") || strings.Contains(serr.Error(), "UNAVAILABLE") || strings.Contains(serr.Error(), "temporarily unavailable")) {
+				// 0.92.x: saldo basi / servis ngambek / signing kedaluwarsa —
+				// semua terdeteksi lewat kode terstruktur (SellRetryable).
+				if execution.SellRetryable(serr) {
 					fmt.Printf("  sell ditunda (%v) — retry %d/9 dalam 5s\n", serr, attempt+1)
 					time.Sleep(5 * time.Second)
 					continue
@@ -198,8 +204,8 @@ func main() {
 
 			if i < cycles-1 {
 				// jeda acak 4-7 dtk setelah trade selesai (ramah API)
-			jitter := time.Duration(rand.Intn(4)) * time.Second
-			time.Sleep(rest + jitter)
+				jitter := time.Duration(rand.Intn(4)) * time.Second
+				time.Sleep(rest + jitter)
 			}
 		}
 		batchEndUSDT := quoteBalance(ctx, client, 1)

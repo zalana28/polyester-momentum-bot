@@ -20,6 +20,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 )
@@ -136,8 +137,8 @@ func main() {
 	acct := env["ACCOUNT_ID"]
 	c, err := polyester.New(polyester.Config{
 		APIURL: "https://api.testnet.polyester.com", WSURL: "wss://api.testnet.polyester.com",
-		APIKeyID: env["API_KEY_ID"], APIPrivateKey: env["API_PRIVATE_KEY"],
-		DefaultAccountID: &acct, HydrateCatalogs: true, Timeout: 20 * time.Second,
+		APIKeyID: env["API_KEY_ID"], APIPrivateKey: auth.NewSecret(env["API_PRIVATE_KEY"]),
+		DefaultAccountID: &acct, Timeout: 20 * time.Second,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "client:", err)

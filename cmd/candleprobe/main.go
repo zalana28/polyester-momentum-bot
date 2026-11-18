@@ -12,8 +12,7 @@ import (
 
 func main() {
 	client, err := polyester.New(polyester.Config{
-		Environment:     &polyester.TestnetEnvironment,
-		HydrateCatalogs: true,
+		Environment: &polyester.TestnetEnvironment,
 	})
 	if err != nil {
 		panic(err)

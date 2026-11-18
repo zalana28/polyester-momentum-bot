@@ -8,6 +8,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
 	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 )
 
@@ -30,12 +31,17 @@ func main() {
 	kid, priv := creds()
 	probeEnv := chain.PolyesterTestnetEnvironment
 	probeEnv.APIURL = "https://api.testnet.polyester.com"
-	client, err := polyester.New(polyester.Config{Environment: &probeEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
-	if err != nil { fmt.Println("client:", err); os.Exit(1) }
+	client, err := polyester.New(polyester.Config{Environment: &probeEnv, APIKeyID: kid, APIPrivateKey: auth.NewSecret(priv)})
+	if err != nil {
+		fmt.Println("client:", err)
+		os.Exit(1)
+	}
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := client.WaitForCatalogs(ctx); err != nil { fmt.Println("catalogs:", err) }
+	if err := client.WaitForCatalogs(ctx); err != nil {
+		fmt.Println("catalogs:", err)
+	}
 
 	// asset id -> symbol dari katalog pair
 	name := map[uint32]string{}
@@ -49,13 +55,18 @@ func main() {
 				var bid, qid uint32
 				fmt.Sscan(base, &bid)
 				fmt.Sscan(quote, &qid)
-				if i := strings.Index(sym, "-"); i > 0 { name[bid] = sym[:i]; name[qid] = sym[i+1:] }
+				if i := strings.Index(sym, "-"); i > 0 {
+					name[bid] = sym[:i]
+					name[qid] = sym[i+1:]
+				}
 			}
 		}
 	}
 
 	bal, err := client.Balances.List(ctx, nil, nil)
-	if err != nil { fmt.Println("balances:", err) } else {
+	if err != nil {
+		fmt.Println("balances:", err)
+	} else {
 		fmt.Println("=== saldo (trading) ===")
 		for _, b := range bal.Balances {
 			if b.Trading != "" && b.Trading != "0" {
@@ -64,14 +75,18 @@ func main() {
 		}
 	}
 	open, err := client.Orders.ListOpen(ctx, nil, nil, nil, nil, false, false, nil)
-	if err != nil { fmt.Println("open:", err) } else {
+	if err != nil {
+		fmt.Println("open:", err)
+	} else {
 		fmt.Printf("=== order terbuka: %d ===\n", len(open.Orders))
 		for _, o := range open.Orders {
 			fmt.Printf("sym %d %s status=%s orig=%+v cum=%+v price=%+v\n", o.SymbolID, o.Side, o.Status, o.OrigQty, o.CumQty, o.Price)
 		}
 	}
 	hist, err := client.Orders.ListHistory(ctx, nil, nil, nil, nil, nil, 15, false, false, nil)
-	if err != nil { fmt.Println("history:", err) } else {
+	if err != nil {
+		fmt.Println("history:", err)
+	} else {
 		fmt.Println("=== 15 order terakhir ===")
 		for _, o := range hist.Orders {
 			fmt.Printf("sym %d %s status=%-8s orig=%+v cum=%+v avgpx=%+v\n", o.SymbolID, o.Side, o.Status, o.OrigQty, o.CumQty, o.AvgPx)

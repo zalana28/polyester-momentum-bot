@@ -130,7 +130,12 @@ func colorize(ev string) (string, string) {
 	return cGray, "."
 }
 
-func MathAbs(f float64) float64 { if f < 0 { return -f }; return f }
+func MathAbs(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
+}
 func pad(s string, w int) string {
 	s = strings.ReplaceAll(s, "\x1b", "")
 	if len([]rune(s)) > w {

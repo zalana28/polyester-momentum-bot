@@ -15,6 +15,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 	"github.com/Fabric-Labs/polyester-sdk-go/realtime"
@@ -71,7 +72,7 @@ type Bot struct {
 	dec            *risk.Decider
 	brain          *brain.Brain
 	jrnl           *journal.Journal
-	orderSub       *realtime.Subscription[models.Order]
+	orderSub       *realtime.Subscription[realtime.OrderStreamEvent]
 	trigSub        *realtime.Subscription[models.TriggerEvent]
 	acts           chan func()
 	deadManArmed   bool
@@ -221,14 +222,13 @@ func (b *Bot) tradePoll() time.Duration {
 // connect builds the SDK client for the configured environment/mode.
 func (b *Bot) connect() error {
 	pc := polyester.Config{
-		Environment:     &polyester.TestnetEnvironment,
-		APIURL:          b.cfg.APIURL,
-		WSURL:           b.cfg.WSURL,
-		HydrateCatalogs: true,
+		Environment: &polyester.TestnetEnvironment,
+		APIURL:      b.cfg.APIURL,
+		WSURL:       b.cfg.WSURL,
 	}
 	if b.cfg.Mode == config.ModeLive {
 		pc.APIKeyID = b.cfg.APIKeyID
-		pc.APIPrivateKey = b.cfg.APIPrivateKey
+		pc.APIPrivateKey = auth.NewSecret(b.cfg.APIPrivateKey)
 		acct := b.cfg.AccountID
 		pc.DefaultAccountID = &acct
 	}
@@ -490,10 +490,22 @@ func (b *Bot) startLiveStreams(ctx context.Context) {
 	b.trigSub = tsub
 
 	go func() {
-		for o := range osub.Messages() {
-			o := o
+		for ev := range osub.Messages() {
+			ev := ev
 			select {
-			case b.acts <- func() { b.onOrderUpdate(o) }:
+			case b.acts <- func() {
+				// Event stream 0.92.x: hanya OrderUnit yang membawa update
+				// order; snapshot/ready/stale diabaikan (ada REST polling +
+				// reconcile sebagai fallback).
+				switch u := ev.(type) {
+				case realtime.OrderUnit:
+					for _, o := range u.Orders {
+						b.onOrderUpdate(o)
+					}
+				case realtime.OrderStreamError:
+					b.log.Printf("[WARN] order stream error: %v", u.Err)
+				}
+			}:
 			case <-ctx.Done():
 				return
 			}

@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -265,6 +266,22 @@ func classifyCreateError(err error) createErrClass {
 	if errors.As(err, &rl) {
 		return createClassRetryRateLimit
 	}
+	// Engine 0.92.x: branch on structured server codes, not human messages
+	// (docs migration guide: "branch on codes, not messages").
+	if retryableCode(err) {
+		return createClassRetryRateLimit
+	}
+	if outcomeUnknown(err) {
+		return createClassAmbiguous
+	}
+	if apiCodeOf(err) != "" {
+		switch code := apiCodeOf(err); {
+		case strings.HasPrefix(code, "AUTH_"):
+			return createClassFatal
+		case strings.HasPrefix(code, "ERROR_CODE_"):
+			return createClassRejected
+		}
+	}
 	var ve *sdkerrors.ValidationError
 	if errors.As(err, &ve) {
 		return createClassRejected
@@ -283,4 +300,77 @@ func classifyCreateError(err error) createErrClass {
 		// Transport-level failures (connection reset etc.) are ambiguous.
 		return createClassAmbiguous
 	}
+}
+
+// apiCodeOf returns the server's structured code ("ERROR_CODE_*", "AUTH_*")
+// when the error carries one, "" otherwise.
+func apiCodeOf(err error) string {
+	var api *sdkerrors.APIError
+	if errors.As(err, &api) {
+		return api.Code
+	}
+	return ""
+}
+
+// retryableCode reports structured codes that refuse a request WITHOUT
+// changing anything server-side, so re-signing and resending is safe after a
+// delay (docs 0.92.5→0.92.9: pre-submission expiry codes are retryable).
+func retryableCode(err error) bool {
+	var skew *sdkerrors.TimestampSkewError
+	if errors.As(err, &skew) {
+		return true
+	}
+	switch apiCodeOf(err) {
+	case sdkerrors.CodeRequestDeadlineExceeded, // signed payload expired, nothing changed
+		sdkerrors.AuthCodeReplayCapacityExhausted, // 429, retryable per docs
+		sdkerrors.AuthCodeTemporarilyUnavailable:
+		return true
+	}
+	return false
+}
+
+// outcomeUnknown reports whether the server may have admitted the request but
+// could not report the result. Per docs: read state first, never blindly
+// resend — the createWithReconcile lookup path handles the rest.
+func outcomeUnknown(err error) bool {
+	return strings.Contains(apiCodeOf(err), "OUTCOME_UNKNOWN")
+}
+
+// InsufficientFunds reports a definitive "not enough free balance" rejection.
+// Helper for supervisors that decide faucet top-ups: works on the structured
+// ERROR_CODE_INSUFFICIENT_FUNDS code with a human-message fallback for older
+// wire formats.
+func InsufficientFunds(err error) bool {
+	if err == nil {
+		return false
+	}
+	if code := apiCodeOf(err); strings.Contains(code, "INSUFFICIENT") {
+		return true
+	}
+	var api *sdkerrors.APIError
+	if errors.As(err, &api) && api.Problem != nil && strings.Contains(strings.ToUpper(api.Problem.Detail), "INSUFFICIENT") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "insufficient")
+}
+
+// SellRetryable reports sell-path failures worth retrying after a pause:
+// insufficient funds (the venue's balance cache can lag a fresh buy),
+// temporarily unavailable services, and expired/replayable signing.
+func SellRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if retryableCode(err) || outcomeUnknown(err) {
+		return true
+	}
+	if code := apiCodeOf(err); strings.Contains(code, "INSUFFICIENT") ||
+		strings.Contains(code, "UNAVAILABLE") ||
+		strings.Contains(code, "TEMPORARILY_UNAVAILABLE") {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "insufficient") ||
+		strings.Contains(msg, "temporarily unavailable") ||
+		strings.Contains(msg, "unavailable")
 }

@@ -2,8 +2,8 @@ buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-202604152011
 buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-20260415201107-50325440f8f2.1/go.mod h1:tvtbpgaVXZX4g6Pn+AnzFycuRK3MOz5HJfEGeEllXYM=
 connectrpc.com/connect v1.20.0 h1:6TNDAB+WeNd2uolWNlYczB5E0KNNaVMNUEx8JEUsPmQ=
 connectrpc.com/connect v1.20.0/go.mod h1:A2ygJrukXwWy32vkCAAHNVguZrqZ+jeZ9rGRnGR4dN4=
-github.com/Fabric-Labs/polyester-sdk-go v0.0.0-20260921152709-f862b07ed078 h1:z9b87VsEKhGWcqp9uPSrild+7uM+qOQOdSYUDdo0NwI=
-github.com/Fabric-Labs/polyester-sdk-go v0.0.0-20260921152709-f862b07ed078/go.mod h1:+hXzCCg5TAEAvhWLP5+r4VlfzEhP4roR/Seks8lespc=
+github.com/Fabric-Labs/polyester-sdk-go v0.34.0 h1:7Of9RlHRaVmJgxXnUVJ5DQk3F6X32/s0JAyN1gDkeos=
+github.com/Fabric-Labs/polyester-sdk-go v0.34.0/go.mod h1:6flZ8OspV2JYXwSUFYcJkJo/FB8xEz94FqEBRF9KHd4=
 github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 h1:1zYrtlhrZ6/b6SAjLSfKzWtdgqK0U+HtH/VcBWh1BaU=
 github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6/go.mod h1:ioLG6R+5bUSO1oeGSDxOV3FADARuMoytZCSX6MEMQkI=
 github.com/StackExchange/wmi v1.2.1 h1:VIkavFPXSjcnS+O8yTq7NI32k0R5Aj+v39y29VYDOSA=

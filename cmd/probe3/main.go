@@ -9,15 +9,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 )
 
 func sp(s string) *string { return &s }
 func baseScaleOf(sym string, c *polyester.Client) int {
 	sc, ok := c.Catalogs.BaseQuantityScaleForSymbol(sym)
-	if !ok { return 6 }
+	if !ok {
+		return 6
+	}
 	return sc
 }
 func mustQtyScaled(v int64, sym string, scale int) models.QtyInput {
@@ -40,15 +43,24 @@ func main() {
 	}
 	env := chain.PolyesterTestnetEnvironment
 	env.APIURL = "https://api.testnet.polyester.com"
-	client, err := polyester.New(polyester.Config{Environment: &env, APIURL: env.APIURL, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
-	if err != nil { fmt.Println("client:", err); os.Exit(1) }
+	client, err := polyester.New(polyester.Config{Environment: &env, APIURL: env.APIURL, APIKeyID: kid, APIPrivateKey: auth.NewSecret(priv)})
+	if err != nil {
+		fmt.Println("client:", err)
+		os.Exit(1)
+	}
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	if err := client.WaitForCatalogs(ctx); err != nil { fmt.Println("catalogs:", err); os.Exit(1) }
+	if err := client.WaitForCatalogs(ctx); err != nil {
+		fmt.Println("catalogs:", err)
+		os.Exit(1)
+	}
 
 	bal, berr := client.Balances.List(ctx, nil, nil)
-	if berr != nil { fmt.Println("balances:", berr); os.Exit(1) }
+	if berr != nil {
+		fmt.Println("balances:", berr)
+		os.Exit(1)
+	}
 	for _, b := range bal.Balances {
 		if b.Trading != "" && b.Trading != "0" {
 			fmt.Printf("saldo: assetID %d = %s (reserved %s)\n", b.AssetID, b.Trading, b.Reserved)
@@ -56,7 +68,10 @@ func main() {
 	}
 
 	ob, oerr := client.Orderbook.Get(ctx, "DOGE-USDT", 3)
-	if oerr != nil { fmt.Println("orderbook:", oerr); os.Exit(1) }
+	if oerr != nil {
+		fmt.Println("orderbook:", oerr)
+		os.Exit(1)
+	}
 	mid := (float64(ob.Bids[0].Price.Ticks()) + float64(ob.Asks[0].Price.Ticks())) / 2 / 1e9
 	fmt.Printf("DOGE mid sekarang: %.6g\n", mid)
 
@@ -64,13 +79,17 @@ func main() {
 	pc, _ := client.Catalogs.PairConstraintsForSymbol(sym)
 	entry := mid * 0.99
 	tick := pc.TickSizeTicks
-	if tick <= 0 { tick = 1 }
+	if tick <= 0 {
+		tick = 1
+	}
 	entry6 := int64(entry * 1e6)
-	entry6 = (entry6 / tick) * tick // align tick (TickSizeTicks dlm satuan true6)
+	entry6 = (entry6 / tick) * tick                  // align tick (TickSizeTicks dlm satuan true6)
 	price := models.PriceFromTicksInt(entry6 * 1000) // true6 -> wire ticks
 	entryStr := fmt.Sprintf("%.6f", float64(entry6)/1e6)
 	step := pc.StepSizeScaled
-	if step <= 0 { step = 1 }
+	if step <= 0 {
+		step = 1
+	}
 	qtyS6 := (int64(5000/entry*1e6) / step) * step
 	qty := mustQtyScaled(qtyS6, sym, baseScaleOf(sym, client))
 

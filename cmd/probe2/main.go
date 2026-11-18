@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 )
 
 func strp(s string) *string { return &s }
@@ -33,7 +34,7 @@ func main() {
 	env.WebsocketURL = "wss://api.testnet.polyester.com/ws"
 	client, err := polyester.New(polyester.Config{
 		Environment: &env, APIURL: env.APIURL,
-		APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
+		APIKeyID: kid, APIPrivateKey: auth.NewSecret(priv),
 	})
 	if err != nil {
 		fmt.Println("client:", err)
@@ -42,17 +43,39 @@ func main() {
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	if err := client.WaitForCatalogs(ctx); err != nil { fmt.Println("catalogs:", err); os.Exit(1) }
+	if err := client.WaitForCatalogs(ctx); err != nil {
+		fmt.Println("catalogs:", err)
+		os.Exit(1)
+	}
 	fmt.Println("CATALOGS OK ✓")
 	fmt.Println("--- probe RPC satu per satu:")
 	bal, balErr := client.Balances.List(ctx, nil, nil)
-	if balErr != nil { fmt.Println("balances.List:", balErr) } else { fmt.Println("balances.List OK —", len(bal.Balances), "baris") }
+	if balErr != nil {
+		fmt.Println("balances.List:", balErr)
+	} else {
+		fmt.Println("balances.List OK —", len(bal.Balances), "baris")
+	}
 	var id18 = uint32(18)
 	ob, obErr := client.Orderbook.Get(ctx, "HYPE-USDT", 3)
-	if obErr != nil { fmt.Println("orderbook:", obErr) } else { fmt.Printf("orderbook OK — %d bid | best bid %v | best ask %v\n", len(ob.Bids), ob.Bids[0].Price, ob.Asks[0].Price) }
+	if obErr != nil {
+		fmt.Println("orderbook:", obErr)
+	} else {
+		fmt.Printf("orderbook OK — %d bid | best bid %v | best ask %v\n", len(ob.Bids), ob.Bids[0].Price, ob.Asks[0].Price)
+	}
 	cnd, cndErr := client.MarketData.GetCandles(ctx, nil, &id18, "1m", 2, nil, nil, false)
-	if cndErr != nil { fmt.Println("candles:", cndErr) } else { fmt.Println("candles OK —", len(cnd.Candles), "candle, close:", cnd.Candles[len(cnd.Candles)-1].Close) }
+	if cndErr != nil {
+		fmt.Println("candles:", cndErr)
+	} else {
+		fmt.Println("candles OK —", len(cnd.Candles), "candle, close:", cnd.Candles[len(cnd.Candles)-1].Close)
+	}
 	ords, ordErr := client.Orders.ListOpen(ctx, nil, nil, nil, nil, false, false, nil)
-	if ordErr != nil { fmt.Println("orders.ListOpen:", ordErr) } else { fmt.Println("orders.ListOpen OK —", len(ords.Orders), "order") }
-	_ = bal; _ = ob; _ = cnd; _ = ords
+	if ordErr != nil {
+		fmt.Println("orders.ListOpen:", ordErr)
+	} else {
+		fmt.Println("orders.ListOpen OK —", len(ords.Orders), "order")
+	}
+	_ = bal
+	_ = ob
+	_ = cnd
+	_ = ords
 }

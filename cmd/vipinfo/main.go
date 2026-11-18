@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 )
 
 func main() {
@@ -26,21 +27,28 @@ func main() {
 	}
 	env := chain.PolyesterTestnetEnvironment
 	env.APIURL = "https://api.testnet.polyester.com"
-	client, err := polyester.New(polyester.Config{Environment: &env, APIURL: env.APIURL, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
-	if err != nil { fmt.Println("client:", err); os.Exit(1) }
+	client, err := polyester.New(polyester.Config{Environment: &env, APIURL: env.APIURL, APIKeyID: kid, APIPrivateKey: auth.NewSecret(priv)})
+	if err != nil {
+		fmt.Println("client:", err)
+		os.Exit(1)
+	}
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	tiers, err := client.VIP.ListVIPTiers(ctx)
-	if err != nil { fmt.Println("tiers:", err) } else {
+	if err != nil {
+		fmt.Println("tiers:", err)
+	} else {
 		fmt.Println("=== VIP TIERS ===")
 		for _, t := range tiers.Tiers {
 			fmt.Printf("tier %+v\n", t)
 		}
 	}
 	st, err := client.VIP.GetVIPStatus(ctx)
-	if err != nil { fmt.Println("status:", err) } else {
+	if err != nil {
+		fmt.Println("status:", err)
+	} else {
 		fmt.Println("=== STATUS AKUN ===")
 		fmt.Printf("%+v\n", st)
 	}

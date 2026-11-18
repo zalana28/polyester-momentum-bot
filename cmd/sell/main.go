@@ -16,6 +16,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
 	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 
@@ -43,7 +44,7 @@ func main() {
 	toolEnv := chain.PolyesterTestnetEnvironment
 	toolEnv.APIURL = "https://api.testnet.polyester.com"
 	client, err := polyester.New(polyester.Config{
-		Environment: &toolEnv, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true,
+		Environment: &toolEnv, APIKeyID: kid, APIPrivateKey: auth.NewSecret(priv),
 	})
 	if err != nil {
 		fmt.Println("client:", err)

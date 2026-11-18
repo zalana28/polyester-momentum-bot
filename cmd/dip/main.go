@@ -33,6 +33,7 @@ import (
 	"time"
 
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 
@@ -155,10 +156,9 @@ func main() {
 	dipEnv.APIURL = "https://api.testnet.polyester.com"
 	dipEnv.WebsocketURL = "wss://api.testnet.polyester.com/ws"
 	client, err = polyester.New(polyester.Config{
-		Environment:     &dipEnv,
-		APIKeyID:        kid,
-		APIPrivateKey:   priv,
-		HydrateCatalogs: true,
+		Environment:   &dipEnv,
+		APIKeyID:      kid,
+		APIPrivateKey: auth.NewSecret(priv),
 	})
 	if err != nil {
 		fmt.Println("client:", err)

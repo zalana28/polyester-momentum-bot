@@ -4,7 +4,8 @@ go 1.26.0
 
 require (
 	connectrpc.com/connect v1.20.0
-	github.com/Fabric-Labs/polyester-sdk-go v0.0.0-20260921152709-f862b07ed078
+	github.com/Fabric-Labs/polyester-sdk-go v0.34.0
+	github.com/gorilla/websocket v1.5.3
 )
 
 require (
@@ -18,7 +19,6 @@ require (
 	github.com/ethereum/go-ethereum v1.17.5 // indirect
 	github.com/google/gnostic v0.7.1 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/mr-tron/base58 v1.3.0 // indirect
 	github.com/supranational/blst v0.3.16 // indirect

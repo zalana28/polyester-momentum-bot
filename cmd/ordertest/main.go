@@ -9,15 +9,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	polyester "github.com/Fabric-Labs/polyester-sdk-go"
+	"github.com/Fabric-Labs/polyester-sdk-go/auth"
+	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/models"
 )
 
 func sp(s string) *string { return &s }
 
 func main() {
-	if len(os.Args) < 3 { fmt.Println("usage: ordertest <SYMBOL> <NOTIONAL>"); os.Exit(2) }
+	if len(os.Args) < 3 {
+		fmt.Println("usage: ordertest <SYMBOL> <NOTIONAL>")
+		os.Exit(2)
+	}
 	sym := strings.ToUpper(os.Args[1])
 	var notional float64
 	fmt.Sscan(os.Args[2], &notional)
@@ -25,20 +29,33 @@ func main() {
 	var kid, priv string
 	for _, l := range strings.Split(string(raw), "\n") {
 		l = strings.TrimSpace(l)
-		if strings.HasPrefix(l, "API_KEY_ID=") { kid = strings.TrimPrefix(l, "API_KEY_ID=") }
-		if strings.HasPrefix(l, "API_PRIVATE_KEY=") { priv = strings.TrimPrefix(l, "API_PRIVATE_KEY=") }
+		if strings.HasPrefix(l, "API_KEY_ID=") {
+			kid = strings.TrimPrefix(l, "API_KEY_ID=")
+		}
+		if strings.HasPrefix(l, "API_PRIVATE_KEY=") {
+			priv = strings.TrimPrefix(l, "API_PRIVATE_KEY=")
+		}
 	}
 	env := chain.PolyesterTestnetEnvironment
 	env.APIURL = "https://api.testnet.polyester.com"
-	client, err := polyester.New(polyester.Config{Environment: &env, APIURL: env.APIURL, APIKeyID: kid, APIPrivateKey: priv, HydrateCatalogs: true})
-	if err != nil { fmt.Println("client:", err); os.Exit(1) }
+	client, err := polyester.New(polyester.Config{Environment: &env, APIURL: env.APIURL, APIKeyID: kid, APIPrivateKey: auth.NewSecret(priv)})
+	if err != nil {
+		fmt.Println("client:", err)
+		os.Exit(1)
+	}
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := client.WaitForCatalogs(ctx); err != nil { fmt.Println("catalogs:", err); os.Exit(1) }
+	if err := client.WaitForCatalogs(ctx); err != nil {
+		fmt.Println("catalogs:", err)
+		os.Exit(1)
+	}
 
 	ob, err := client.Orderbook.Get(ctx, sym, 2)
-	if err != nil { fmt.Println("orderbook:", err); os.Exit(1) }
+	if err != nil {
+		fmt.Println("orderbook:", err)
+		os.Exit(1)
+	}
 	mid := (float64(ob.Bids[0].Price.Ticks()) + float64(ob.Asks[0].Price.Ticks())) / 2 / 1e9
 	pc, _ := client.Catalogs.PairConstraintsForSymbol(sym)
 	bs, _ := client.Catalogs.BaseQuantityScaleForSymbol(sym)
@@ -56,7 +73,10 @@ func main() {
 		Symbol: &sym, Side: "buy", OrderType: "limit", TIF: sp("gtc"),
 		Price: &price, Qty: models.QtyFromScaled(q), ClientOrderID: &coid,
 	}, nil)
-	if err != nil { fmt.Printf("REJECT %s $%.0f: %v\n", sym, notional, err); os.Exit(1) }
+	if err != nil {
+		fmt.Printf("REJECT %s $%.0f: %v\n", sym, notional, err)
+		os.Exit(1)
+	}
 	fmt.Printf("ACCEPT %s $%.0f (order %s) — cancel...\n", sym, notional, res.OrderID)
 	_, cerr := client.Orders.Cancel(ctx, nil, models.OrderKeyByID(res.OrderID), &sym, nil, nil)
 	fmt.Println("cancel:", cerr == nil)
