@@ -307,15 +307,32 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
 	}
 	switch {
-	case mv.regime == strategy.RegimeTrendDown && mv.score < 55:
+	// Backtest 10 hari (cmd/backtest, 14 pair): downtrend & choppy adalah
+	// dua pembunuh utama — skip APA SAHA di regime itu, bukan hanya saat
+	// skor rendah. Winrate naik 58% -> 74%.
+	case mv.regime == strategy.RegimeTrendDown:
 		bumpSkip(symbol)
-		lf("skip: downtrend (score %.0f) — do not catch falling knives", mv.score)
+		lf("skip: downtrend — do not catch falling knives")
+		return nil
+	case mv.regime == strategy.RegimeChoppy:
+		bumpSkip(symbol)
+		lf("skip: choppy (whipsaw risk)")
 		return nil
 	case mv.regime == strategy.RegimeTrendUp && mv.volSurge && mv.score >= envF("DIP_MOM_SCORE", 65):
 		lf("MOMENTUM: regime=%s score=%.0f volSurge=%v atr=%.2f%% — IOC entry",
 			mv.regime, mv.score, mv.volSurge, mv.atrPct)
 		return runMomentumCycle(ctx, symbol, cycleNo, info)
 	default:
+		// Cooldown adaptif: pair yang baru rugi berhenti dibeli dulu
+		// (brain cooldown, hasil backtest stop=40bps + score gate).
+		if at, ok := lastLossAt[symbol]; ok {
+			cd := time.Duration(envF("DIP_COOLDOWN_MIN", 10)) * time.Minute
+			if rest := cd - time.Since(at); rest > 0 {
+				bumpSkip(symbol)
+				lf("skip: cooldown %.0f menit setelah loss", rest.Minutes())
+				return nil
+			}
+		}
 		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
 	}
 }
@@ -372,7 +389,9 @@ func runDipCycle(ctx context.Context, symbol string, cycleNo int, offBps int) er
 
 	// SL server-side tidak dipakai (mereserve base & memblokir TP sell).
 	// SL bot-side + manajemen exit ada di holdAndExit.
-	slPrice := tickAlign(float64(avgS6)*(1-float64(envI("DIP_SL_BPS", 120))/10000), info.TickTicks)
+	// 40 bps: hasil grid-search backtest (120 bps membuat RR 0.6 — butuh
+	// winrate >75% hanya untuk breakeven; 40 bps + gate brain = +29.9/10 hari).
+	slPrice := tickAlign(float64(avgS6)*(1-float64(envI("DIP_SL_BPS", 40))/10000), info.TickTicks)
 	targetS6 := tickAlign(float64(avgS6)*(1+float64(target)/10000), info.TickTicks)
 	return holdAndExit(ctx, symbol, info, filledS6, avgS6, targetS6, slPrice, "dip-maker", envI("DIP_MAX_HOLD_MIN", 45))
 }
@@ -782,6 +801,9 @@ func bookCycle(symbol, strat string, entryS6, qtyS6, exitS6 int64, reason string
 		ps.Wins++
 	} else {
 		ps.Losses++
+		// Cooldown adaptif (DIP_COOLDOWN_MIN): pair yang baru rugi berhenti
+		// dibeli sementara — brain layer hasil backtest.
+		lastLossAt[symbol] = time.Now()
 	}
 	ps.Net += net
 	st.PerPair[symbol] = ps
@@ -949,6 +971,7 @@ var (
 	br          *brain.Brain
 	regimeCache = map[string]regimeEntry{}
 	viewCache   = map[string]viewEntry{}
+	lastLossAt  = map[string]time.Time{} // cooldown adaptif per pair setelah loss
 	st          dipStats
 	peakNet     float64
 )
