@@ -158,6 +158,14 @@ pasang beli 30bps di bawah harga → terisi → SL server-side + jual +60bps
 - Oracle harga: keputusan exit butuh konfirmasi candle 1m (anti data basi)
 - Loss cap: −$25 dari puncak → stop (ubah `MAX_LOSS_USD`)
 
+### Otak baru (backtest 2026-11-19)
+Dip sekarang pakai gate "brain" — hasil uji 14 pair × 10 hari data real
+(cmd `backtest`, lihat juga `./bin/backtest -variant both`):
+- **Skip downtrend & choppy** — jangan menebuk pisau jatuh / pasar random
+- **SL 40bps** (dulu 120): risk-reward 40:60, bukan 120:60
+- **Cooldown 10 menit** per pair setelah loss (`DIP_COOLDOWN_MIN`)
+- Angka uji: winrate 58%→74%, fee boros −$6.5k → +$29.9 per 10 hari
+
 ### Penjaga (supervisor)
 ```
 loop: cek DNS → bersihkan order/posisi → cek saldo → cukup? jalankan bot : stop
