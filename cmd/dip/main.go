@@ -304,6 +304,11 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 	if aerr != nil {
 		// API lambat / candle kurang: fallback perilaku dip standar.
 		lf("analyze failed (%v) — standard dip mode", aerr)
+		if mv.mrScore < envF("DIP_MIN_SCORE", 45) {
+			bumpSkip(symbol)
+			lf("skip: skor meanrev %.0f < bar %.0f (gate backtest)", mv.mrScore, envF("DIP_MIN_SCORE", 45))
+			return nil
+		}
 		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
 	}
 	switch {
@@ -332,6 +337,11 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 				lf("skip: cooldown %.0f menit setelah loss", rest.Minutes())
 				return nil
 			}
+		}
+		if mv.mrScore < envF("DIP_MIN_SCORE", 45) {
+			bumpSkip(symbol)
+			lf("skip: skor meanrev %.0f < bar %.0f (gate backtest)", mv.mrScore, envF("DIP_MIN_SCORE", 45))
+			return nil
 		}
 		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
 	}
@@ -1092,6 +1102,7 @@ func bumpSkip(symbol string) {
 type mktView struct {
 	regime   strategy.Regime
 	score    float64
+	mrScore  float64 // skor meanrev (Bollinger+RSI) 0..100 — gate hasil backtest
 	volSurge bool
 	atrPct   float64
 }
@@ -1134,6 +1145,17 @@ func analyze(ctx context.Context, symbol string, info pairInfo) (mktView, error)
 	}
 	mv := mktView{regime: strategy.ClassifyRegime(sc, 5, 15)}
 	regimeCache[symbol] = regimeEntry{mv.regime, time.Now()}
+	// Skor meanrev ( hasil backtest: gate confidence >= 45 menaikkan
+	// winrate tanpa mematikan frekuensi). Window terakhir cukup: indikator
+	// meanrev hanya melihat 20 candle + RSI 14.
+	mr := strategy.NewMeanReversionStrategy()
+	var mrv strategy.Vote
+	for _, wc := range sc {
+		mrv = mr.OnCandle(wc) // vote candle terakhir = hasil feed tepat satu kali
+	}
+	if mrv.Kind == "buy" {
+		mv.mrScore = mrv.Confidence * 100
+	}
 	ef := emaSeries(closes, 5)
 	es := emaSeries(closes, 15)
 	v := br.Evaluate(symbol, bc, ef > es, ef, es)

@@ -21,9 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
-	"polyester-momentum-bot/internal/brain"
 	"polyester-momentum-bot/internal/strategy"
 )
 
@@ -104,10 +102,6 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 	var res Result
 	warmup := 60 // candle untuk EMA/RSI/regime stabil
 
-	var br *brain.Brain
-	if useBrain {
-		br = brain.New(minScore, time.Duration(cooldownMin)*time.Minute)
-	}
 	// meanrev stateful: satu instance per replay, diberi makan tiap candle
 	// tertutup tepat satu kali (mirip aliran live).
 	meanrev := strategy.NewMeanReversionStrategy()
@@ -115,6 +109,8 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 	st := btState{}
 	equity := 0.0
 	peakEq := 0.0
+	lastLossIdx := -9999
+	cooldownBars := int(cooldownMin/5.0) + 1 // candle 5m: 10 menit = 2 bar
 
 	makerFeeUSD := cfg.BudgetUSD * cfg.MakerFee
 	takerFeeUSD := cfg.BudgetUSD * cfg.TakerFee
@@ -137,12 +133,10 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 				equity += net
 				peakEq = math.Max(peakEq, equity)
 				res.MaxDD = math.Max(res.MaxDD, peakEq-equity)
-				if br != nil {
-					br.ReportResult("bt", net)
+				if net < 0 {
+					lastLossIdx = i
 				}
-				if meanrev != nil {
-					meanrev.NoteExit()
-				}
+				meanrev.NoteExit()
 				st = btState{}
 				continue
 			}
@@ -159,12 +153,10 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 				equity += net
 				peakEq = math.Max(peakEq, equity)
 				res.MaxDD = math.Max(res.MaxDD, peakEq-equity)
-				if br != nil {
-					br.ReportResult("bt", net)
+				if net < 0 {
+					lastLossIdx = i
 				}
-				if meanrev != nil {
-					meanrev.NoteExit()
-				}
+				meanrev.NoteExit()
 				st = btState{}
 				continue
 			}
@@ -184,12 +176,10 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 				equity += net
 				peakEq = math.Max(peakEq, equity)
 				res.MaxDD = math.Max(res.MaxDD, peakEq-equity)
-				if br != nil {
-					br.ReportResult("bt", net)
+				if net < 0 {
+					lastLossIdx = i
 				}
-				if meanrev != nil {
-					meanrev.NoteExit()
-				}
+				meanrev.NoteExit()
 				st = btState{}
 				continue
 			}
@@ -210,7 +200,7 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 			if regime == strategy.RegimeChoppy {
 				continue
 			}
-			if cd, _ := br.CoolingDown("bt", time.Unix(c.Ts, 0)); cd {
+			if i-lastLossIdx < cooldownBars {
 				continue
 			}
 			if mrVote.Kind != "buy" || mrVote.Confidence*100 < minScore {
@@ -242,12 +232,7 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 					equity += net
 					peakEq = math.Max(peakEq, equity)
 					res.MaxDD = math.Max(res.MaxDD, peakEq-equity)
-					if br != nil {
-						br.ReportResult("bt", net)
-					}
-					if meanrev != nil {
-						meanrev.NoteExit()
-					}
+					meanrev.NoteExit()
 					i = j
 				} else if fc.High >= targetPx {
 					// Terisi lalu langsung kena target pada candle yang sama.
@@ -262,12 +247,7 @@ func runPair(cfg Config, candles []CandleRaw, useBrain bool, minScore float64, c
 					equity += net
 					peakEq = math.Max(peakEq, equity)
 					res.MaxDD = math.Max(res.MaxDD, peakEq-equity)
-					if br != nil {
-						br.ReportResult("bt", net)
-					}
-					if meanrev != nil {
-						meanrev.NoteExit()
-					}
+					meanrev.NoteExit()
 					i = j
 				} else {
 					st = btState{inPos: true, entryPx: entry, entryBar: j, targetPx: targetPx, peakPx: fc.High}
