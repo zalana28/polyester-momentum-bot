@@ -34,6 +34,7 @@ import (
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 
 	"polyester-momentum-bot/internal/execution"
+	"polyester-momentum-bot/internal/ledgerx"
 	"polyester-momentum-bot/internal/market"
 	"polyester-momentum-bot/internal/num"
 )
@@ -95,6 +96,40 @@ func main() {
 		}
 		wireScale = w
 	}
+
+	// Pre-cache MarketInfo and LiveExecutor per symbol once at boot so we do
+	// not burn an extra GetSpotConfig HTTP round-trip on every single trade.
+	skipPreview := os.Getenv("CHURN_SKIP_PREVIEW") == "1"
+	infoCache := make(map[string]execution.MarketInfo, len(symbols))
+	execCache := make(map[string]*execution.LiveExecutor, len(symbols))
+	budgetCache := make(map[string]int64, len(symbols))
+	var validSymbols []string
+	for _, sym := range symbols {
+		mi, merr := marketInfoFromSpot(spot.Raw, client, sym, wireScale)
+		if merr != nil {
+			fmt.Printf("skip %s at boot: %v\n", sym, merr)
+			continue
+		}
+		bScaled, berr := num.ParseDecimalToScaled(fmt.Sprintf("%.2f", budgetF), mi.QuoteScale)
+		if berr != nil {
+			fmt.Printf("skip %s budget at boot: %v\n", sym, berr)
+			continue
+		}
+		ex := execution.NewLiveExecutor(client, mi, stdoutJournal{}, nil, 50, 15)
+		if skipPreview {
+			ex.SetSkipPreview(true)
+		}
+		infoCache[sym] = mi
+		execCache[sym] = ex
+		budgetCache[sym] = bScaled
+		validSymbols = append(validSymbols, sym)
+	}
+	symbols = validSymbols
+	if len(symbols) == 0 {
+		fmt.Println("tidak ada symbol yang valid setelah resolusi marketInfo")
+		os.Exit(1)
+	}
+
 	fmt.Printf("=== CHURN AUTO-TRADE: %d siklus x $%.0f, istirahat %s, %d pair ===\n",
 		cycles, budgetF, rest, len(symbols))
 	fmt.Println(strings.Join(symbols, " "))
@@ -107,6 +142,18 @@ func main() {
 	noFunds := 0
 	startWall := time.Now()
 	seq := 0
+	sellBackoffs := []time.Duration{
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		3 * time.Second,
+		4 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+	}
 	for batch := 1; ; batch++ {
 		batchStartUSDT := quoteBalance(ctx, client, 1)
 		batchStart := time.Now()
@@ -120,46 +167,49 @@ func main() {
 			seq++
 			fmt.Printf("\n[%2d/%d] %s\n", i+1, cycles, symbol)
 
-			mi, err := marketInfo(ctx, client, symbol, wireScale)
-			if err != nil {
-				fmt.Printf("  skip: %v\n", err)
-				continue
-			}
-			budget, err := num.ParseDecimalToScaled(fmt.Sprintf("%.2f", budgetF), mi.QuoteScale)
-			if err != nil {
-				fmt.Printf("  skip: budget: %v\n", err)
-				continue
-			}
-			exec := execution.NewLiveExecutor(client, mi, stdoutJournal{}, nil, 50, 15)
-			if os.Getenv("CHURN_SKIP_PREVIEW") == "1" {
-				exec.SetSkipPreview(true)
-			}
-			coid := fmt.Sprintf("pmom-churn-%d-%d", time.Now().Unix(), i)
+			mi := infoCache[symbol]
+			budget := budgetCache[symbol]
+			exec := execCache[symbol]
+			coid := fmt.Sprintf("pmom-churn-%d-%d", time.Now().UnixNano(), i)
 
 			buy, err := exec.Buy(ctx, budget, coid+"-b")
 			if err != nil {
-				fmt.Printf("  BUY gagal: %v\n", err)
-				time.Sleep(2 * time.Second)
-				// Engine 0.92.x: klasifikasi pakai kode terstruktur
-				// (execution.InsufficientFunds), bukan string mentah.
-				if execution.InsufficientFunds(err) {
-					noFunds++
-					if noFunds >= 10 {
-						fmt.Println("=== SALDO TIDAK CUKUP utk budget siklus — berhenti (kode 42, perlu faucet) ===")
-						os.Exit(42)
+				// If order projection lagged or failed after the buy actually filled
+				// on the matching engine, recover from the actual base balance so
+				// inventory is immediately sold back to USDT instead of stranded.
+				if held := baseBalanceScaled(ctx, client, mi); held >= mi.MinQtyScaled {
+					fmt.Printf("  BUY projection err (%v) tapi saldo base terdeteksi (%s) — lanjut SELL recovery\n",
+						err, num.FormatScaled(held, mi.BaseScale))
+					buy = &execution.Fill{
+						ClientOrderID:   coid + "-b",
+						BaseQtyScaled:   held,
+						AvgPriceScaled6: 0,
+						Status:          "recovered_from_balance",
 					}
 				} else {
-					noFunds = 0
+					fmt.Printf("  BUY gagal: %v\n", err)
+					time.Sleep(1500 * time.Millisecond)
+					// Engine 0.92.x: klasifikasi pakai kode terstruktur
+					// (execution.InsufficientFunds), bukan string mentah.
+					if execution.InsufficientFunds(err) {
+						noFunds++
+						if noFunds >= 10 {
+							fmt.Println("=== SALDO TIDAK CUKUP utk budget siklus — berhenti (kode 42, perlu faucet) ===")
+							os.Exit(42)
+						}
+					} else {
+						noFunds = 0
+					}
+					continue
 				}
-				continue
 			}
 			noFunds = 0
 			fmt.Printf("  BUY  %s @ %s (status=%s)\n",
 				num.FormatScaled(buy.BaseQtyScaled, mi.BaseScale),
 				num.FormatScaled(buy.AvgPriceScaled6, 6), buy.Status)
 
-			// Sell dgn retry: preview server kadang baca saldo basi (INSUFFICIENT_FUNDS
-			// walau koin baru dibeli) — tunggu cache segar lalu coba lagi.
+			// Sell dgn retry bertahap: cache saldo server kadang lag beberapa ratus ms
+			// setelah buy selesai — mulai retry cepat (500ms -> 1s -> 2s ...).
 			var sell *execution.Fill
 			var serr error
 			for attempt := 0; attempt < 10; attempt++ {
@@ -175,8 +225,9 @@ func main() {
 				// 0.92.x: saldo basi / servis ngambek / signing kedaluwarsa —
 				// semua terdeteksi lewat kode terstruktur (SellRetryable).
 				if execution.SellRetryable(serr) {
-					fmt.Printf("  sell ditunda (%v) — retry %d/9 dalam 5s\n", serr, attempt+1)
-					time.Sleep(5 * time.Second)
+					wait := sellBackoffs[attempt]
+					fmt.Printf("  sell ditunda (%v) — retry %d/9 dalam %s\n", serr, attempt+1, wait)
+					time.Sleep(wait)
 					continue
 				}
 				break
@@ -194,8 +245,11 @@ func main() {
 			if sell == nil {
 				continue // dust: siklus dianggap selesai
 			}
-			pnl := (num.ScaledToFloat(sell.AvgPriceScaled6, 6) - num.ScaledToFloat(buy.AvgPriceScaled6, 6)) *
-				num.ScaledToFloat(buy.BaseQtyScaled, mi.BaseScale)
+			pnl := 0.0
+			if buy.AvgPriceScaled6 > 0 && sell.AvgPriceScaled6 > 0 {
+				pnl = (num.ScaledToFloat(sell.AvgPriceScaled6, 6) - num.ScaledToFloat(buy.AvgPriceScaled6, 6)) *
+					num.ScaledToFloat(buy.BaseQtyScaled, mi.BaseScale)
+			}
 			totalPnL += pnl
 			fmt.Printf("  SELL %s @ %s (status=%s)  PnL siklus: %.4f\n",
 				num.FormatScaled(sell.BaseQtyScaled, mi.BaseScale),
@@ -203,8 +257,8 @@ func main() {
 			done++
 
 			if i < cycles-1 {
-				// jeda acak 4-7 dtk setelah trade selesai (ramah API)
-				jitter := time.Duration(rand.Intn(4)) * time.Second
+				// jeda setelah trade selesai (ramah API)
+				jitter := time.Duration(rand.Intn(2)) * time.Second
 				time.Sleep(rest + jitter)
 			}
 		}
@@ -224,15 +278,11 @@ func main() {
 		endUSDT, endUSDT-startUSDT, totalPnL)
 }
 
-// marketInfo mirrors the bot's pair resolution for one symbol.
-func marketInfo(ctx context.Context, client *polyester.Client, symbol string, wireScale int) (execution.MarketInfo, error) {
-	spot, err := client.MarketData.GetSpotConfig(ctx)
-	if err != nil {
-		return execution.MarketInfo{}, err
-	}
+// marketInfoFromSpot resolves pair metadata from an already-fetched spot config.
+func marketInfoFromSpot(spotRaw map[string]any, client *polyester.Client, symbol string, wireScale int) (execution.MarketInfo, error) {
 	var pair map[string]any
 	for _, key := range []string{"pairs", "symbols"} {
-		list, _ := spot.Raw[key].([]any)
+		list, _ := spotRaw[key].([]any)
 		for _, item := range list {
 			if p, ok := item.(map[string]any); ok && p["symbol"] == symbol {
 				pair = p
@@ -303,7 +353,7 @@ func envF(key string, def float64) float64 {
 }
 
 func quoteBalance(ctx context.Context, client *polyester.Client, quoteAssetID uint32) float64 {
-	bal, err := client.Balances.List(ctx, nil, nil)
+	bal, err := ledgerx.List(ctx, client)
 	if err != nil {
 		return 0
 	}
@@ -312,6 +362,27 @@ func quoteBalance(ctx context.Context, client *polyester.Client, quoteAssetID ui
 			s, _ := codecs.FormatLedgerU128(b.Trading, codecs.LedgerScale)
 			f, _ := strconv.ParseFloat(s, 64)
 			return f
+		}
+	}
+	return 0
+}
+
+func baseBalanceScaled(ctx context.Context, client *polyester.Client, mi execution.MarketInfo) int64 {
+	bal, err := ledgerx.List(ctx, client)
+	if err != nil {
+		return 0
+	}
+	for _, b := range bal.Balances {
+		if b.AssetID == mi.BaseAssetID {
+			s, err := codecs.FormatLedgerU128(b.Trading, codecs.LedgerScale)
+			if err != nil {
+				return 0
+			}
+			scaled, err := num.ParseDecimalToScaled(s, mi.BaseScale)
+			if err != nil {
+				return 0
+			}
+			return scaled
 		}
 	}
 	return 0

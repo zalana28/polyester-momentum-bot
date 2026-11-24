@@ -41,6 +41,7 @@ type Journal struct {
 	path   string
 	file   *os.File
 	writer *bufio.Writer
+	fsync  bool
 }
 
 // Open creates (or appends to) <dir>/journal.jsonl with 0700 directory perms.
@@ -53,13 +54,15 @@ func Open(dir string) (*Journal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("journal: open %s: %w", path, err)
 	}
-	return &Journal{path: path, file: f, writer: bufio.NewWriter(f)}, nil
+	fsyncOn := os.Getenv("JOURNAL_FSYNC") == "1" || os.Getenv("JOURNAL_FSYNC") == "true"
+	return &Journal{path: path, file: f, writer: bufio.NewWriter(f), fsync: fsyncOn}, nil
 }
 
 // Path returns the journal file location.
 func (j *Journal) Path() string { return j.path }
 
-// Append writes one entry and fsyncs it before returning.
+// Append writes one entry and flushes it to the OS kernel page cache immediately
+// (and fsyncs to physical disk when JOURNAL_FSYNC=1 is set).
 func (j *Journal) Append(e Entry) error {
 	if e.Ts.IsZero() {
 		e.Ts = time.Now().UTC()
@@ -77,13 +80,15 @@ func (j *Journal) Append(e Entry) error {
 	if err := j.writer.Flush(); err != nil {
 		return fmt.Errorf("journal: flush: %w", err)
 	}
-	if err := j.file.Sync(); err != nil {
-		return fmt.Errorf("journal: sync: %w", err)
+	if j.fsync {
+		if err := j.file.Sync(); err != nil {
+			return fmt.Errorf("journal: sync: %w", err)
+		}
 	}
 	return nil
 }
 
-// Close flushes and closes the underlying file.
+// Close flushes, syncs, and closes the underlying file.
 func (j *Journal) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -91,6 +96,7 @@ func (j *Journal) Close() error {
 		j.file.Close()
 		return err
 	}
+	_ = j.file.Sync()
 	return j.file.Close()
 }
 

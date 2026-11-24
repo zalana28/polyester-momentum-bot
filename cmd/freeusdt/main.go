@@ -12,6 +12,8 @@ import (
 	"github.com/Fabric-Labs/polyester-sdk-go/auth"
 	"github.com/Fabric-Labs/polyester-sdk-go/chain"
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
+
+	"polyester-momentum-bot/internal/ledgerx"
 )
 
 func parseFloat(s string) float64 {
@@ -21,7 +23,10 @@ func parseFloat(s string) float64 {
 }
 
 func main() {
-	raw, _ := os.ReadFile("/Users/jazeerahusna/.zcode/workspace/default/polyester-momentum-bot/.env")
+	raw, err := os.ReadFile(".env")
+	if err != nil {
+		raw, _ = os.ReadFile("/Users/jazeerahusna/.zcode/workspace/default/polyester-momentum-bot/.env")
+	}
 	var kid, priv string
 	for _, l := range strings.Split(string(raw), "\n") {
 		l = strings.TrimSpace(l)
@@ -40,23 +45,32 @@ func main() {
 		os.Exit(1)
 	}
 	defer client.Close()
+	lastValidZero := false
 	for attempt := 0; attempt < 3; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		bal, err := client.Balances.List(ctx, nil, nil)
+		bal, err := ledgerx.List(ctx, client)
+		cancel()
 		if err == nil {
+			found := "0.00"
 			for _, b := range bal.Balances {
 				if b.AssetID == 1 {
 					s, _ := codecs.FormatLedgerU128(b.Available, codecs.LedgerScale)
-					if f := parseFloat(s); f > 1 { // sanity: baca nyata
-						fmt.Println(s)
-						cancel()
-						return
+					if s != "" {
+						found = s
 					}
+					break
 				}
 			}
+			if f := parseFloat(found); f > 1 || lastValidZero {
+				fmt.Println(found)
+				return
+			}
+			// Bacaan <= $1 dikonfirmasi sekali lagi untuk membedakan cache 0 palsu vs saldo benar-benar habis
+			lastValidZero = true
+			time.Sleep(1500 * time.Millisecond)
+			continue
 		}
-		cancel()
-		time.Sleep(4 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 	fmt.Println("ERR")
 }

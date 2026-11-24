@@ -33,6 +33,7 @@ func (e *Ensemble) OnCandle(c Candle, regime Regime) (buy *Vote, exit bool, vote
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	buyScore := 0.0
+	bestScore := -1.0
 	var best *Vote
 	for _, m := range e.members {
 		v := m.OnCandle(c)
@@ -42,7 +43,8 @@ func (e *Ensemble) OnCandle(c Candle, regime Regime) (buy *Vote, exit bool, vote
 		case "buy":
 			score := w * v.Confidence
 			buyScore += score
-			if best == nil || score > buyScore {
+			if best == nil || score > bestScore {
+				bestScore = score
 				v2 := v
 				best = &v2
 			}

@@ -226,7 +226,17 @@ func isConnectCode(err error, codes ...connect.Code) bool {
 // Exported for callers (reconcile, journal replay) that treat absence as a
 // meaningful answer.
 func IsNotFound(err error) bool {
-	return isConnectCode(err, connect.CodeNotFound)
+	if err == nil {
+		return false
+	}
+	if isConnectCode(err, connect.CodeNotFound) {
+		return true
+	}
+	if strings.Contains(apiCodeOf(err), "NOT_FOUND") {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "not_found")
 }
 
 // notFound reports whether the error means "object does not exist".
@@ -273,6 +283,12 @@ func classifyCreateError(err error) createErrClass {
 	}
 	if outcomeUnknown(err) {
 		return createClassAmbiguous
+	}
+	if InsufficientFunds(err) {
+		return createClassRejected
+	}
+	if msg := strings.ToLower(err.Error()); strings.Contains(msg, "duplicate client") {
+		return createClassRejected
 	}
 	if apiCodeOf(err) != "" {
 		switch code := apiCodeOf(err); {

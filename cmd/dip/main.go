@@ -41,6 +41,7 @@ import (
 
 	"polyester-momentum-bot/internal/brain"
 	"polyester-momentum-bot/internal/journal"
+	"polyester-momentum-bot/internal/ledgerx"
 	"polyester-momentum-bot/internal/market"
 	"polyester-momentum-bot/internal/num"
 	"polyester-momentum-bot/internal/strategy"
@@ -302,12 +303,15 @@ func runCycle(ctx context.Context, symbol string, cycleNo int) error {
 		viewCache[symbol] = viewEntry{mv, time.Now()}
 	}
 	if aerr != nil {
-		// API lambat / candle kurang: fallback perilaku dip standar.
+		// API lambat / candle kurang: fallback perilaku dip standar (tetap hormati cooldown loss).
 		lf("analyze failed (%v) — standard dip mode", aerr)
-		if mv.mrScore < envF("DIP_MIN_SCORE", 45) {
-			bumpSkip(symbol)
-			lf("skip: skor meanrev %.0f < bar %.0f (gate backtest)", mv.mrScore, envF("DIP_MIN_SCORE", 45))
-			return nil
+		if at, ok := lastLossAt[symbol]; ok {
+			cd := time.Duration(envF("DIP_COOLDOWN_MIN", 10)) * time.Minute
+			if rest := cd - time.Since(at); rest > 0 {
+				bumpSkip(symbol)
+				lf("skip: cooldown %.0f menit setelah loss", rest.Minutes())
+				return nil
+			}
 		}
 		return runDipCycle(ctx, symbol, cycleNo, envI("DIP_OFFSET_BPS", 30))
 	}
@@ -425,30 +429,26 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 
 	started := time.Now()
 	maxHold := time.Duration(maxHoldMin) * time.Minute
-	liveI := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		time.Sleep(2 * time.Second)
-		liveI++
-		if liveI%2 == 0 {
-			b2, a2, berr := bookTop(ctx, info)
-			if berr != nil {
-				fctx, fc := context.WithTimeout(context.Background(), 5*time.Second)
-				b2, a2, berr = bookTop(fctx, info)
-				fc()
-			}
-			if berr != nil {
-				continue
-			}
-			mid := (b2 + a2) / 2
+		b2, a2, berr := bookTop(ctx, info)
+		if berr != nil {
+			fctx, fc := context.WithTimeout(context.Background(), 5*time.Second)
+			b2, a2, berr = bookTop(fctx, info)
+			fc()
+		}
+		if berr == nil {
+			midS6 := (b2 + a2) / 2
+			midUSD := midS6 / 1e6
 			writeLive("HOLD", symbol, map[string]any{
-				"entry": float64(avgS6) / 1e6, "mid": mid / 1e6,
+				"entry": float64(avgS6) / 1e6, "mid": midUSD,
 				"target": float64(targetS6) / 1e6, "sl": float64(slPrice) / 1e6,
 				"qty": float64(filledS6) / math.Pow10(int(info.BaseScale))})
-			if mid >= float64(targetS6)/1e6 {
-				ok, why := priceFresh(ctx, symbol, info, mid)
+			if midS6 >= float64(targetS6) {
+				ok, why := priceFresh(ctx, symbol, info, midUSD)
 				if !ok {
 					lf("TP tertunda — harga TIDAK SEGAR (%s), tunggu konfirmasi", why)
 				} else {
@@ -457,19 +457,15 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 					return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
 				}
 			}
-		}
-		// SL server-side melindungi; kalau trigger gagal dipasang, watchdog bot
-		// mengambil alih (bookTop bisa stale — lapisan kedua saja)
-		if slID == "" {
-			if b2, a2, berr := bookTop(ctx, info); berr == nil {
-				if (b2+a2)/2 <= float64(slPrice)/1e6 {
-					ok, why := priceFresh(ctx, symbol, info, (b2+a2)/2)
-					if !ok {
-						lf("SL bot tertunda — harga TIDAK SEGAR (%s)", why)
-					} else {
-						lf("SL bot-side (server SL tak tersedia, %s) — market exit", why)
-						return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
-					}
+			// SL server-side melindungi; kalau trigger gagal dipasang, watchdog bot
+			// mengambil alih (bookTop bisa stale — lapisan kedua saja)
+			if slID == "" && midS6 <= float64(slPrice) {
+				ok, why := priceFresh(ctx, symbol, info, midUSD)
+				if !ok {
+					lf("SL bot tertunda — harga TIDAK SEGAR (%s)", why)
+				} else {
+					lf("SL bot-side (server SL tak tersedia, %s) — market exit", why)
+					return takerExit(ctx, symbol, filledS6, avgS6, targetS6, strat)
 				}
 			}
 		}
@@ -484,9 +480,11 @@ func holdAndExit(ctx context.Context, symbol string, info pairInfo, filledS6, av
 var errReprice = errors.New("reprice")
 
 func placeAndAwaitBuy(ctx context.Context, symbol string, entryS6, qtyS6 int64, coid string, info pairInfo) (int64, int64, error) {
-	if err := placeLimitBuy(ctx, symbol, entryS6, qtyS6, coid); err != nil {
+	admittedCoid, err := placeLimitBuy(ctx, symbol, entryS6, qtyS6, coid)
+	if err != nil {
 		return 0, 0, err
 	}
+	coid = admittedCoid
 	deadline := time.Now().Add(time.Duration(envI("DIP_REPRICE_SEC", 90)) * time.Second)
 	liveI := 0
 	for {
@@ -501,7 +499,7 @@ func placeAndAwaitBuy(ctx context.Context, symbol string, entryS6, qtyS6 int64, 
 				writeLive("WAIT_BUY", symbol, map[string]any{
 					"order_price": float64(entryS6) / 1e6, "mid": mid / 1e6,
 					"dist_bps": (float64(mid) - float64(entryS6)) * 10000 / float64(entryS6),
-					"qty":      float64(qtyS6) / 1e6})
+					"qty":      float64(qtyS6) / math.Pow10(int(info.BaseScale))})
 			}
 		}
 		st, err := orderSnapshot(ctx, symbol, coid)
@@ -560,9 +558,9 @@ func takerExit(ctx context.Context, symbol string, qtyS6, avgS6, targetS6 int64,
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if exitS6 == 0 { // fallback: mid pasar saat ini
+	if exitS6 == 0 { // fallback: mid pasar saat ini (sudah dalam skala true6)
 		if b2, a2, berr := bookTop(ctx, info); berr == nil {
-			exitS6 = int64((b2 + a2) / 2 * 1e6)
+			exitS6 = int64((b2 + a2) / 2)
 		}
 	}
 	bookCycle(symbol, strat, avgS6, qtyS6, exitS6, "taker_exit", 0.001, 0.0015)
@@ -572,12 +570,16 @@ func takerExit(ctx context.Context, symbol string, qtyS6, avgS6, targetS6 int64,
 
 // placeLimitBuy places a post-only GTC limit buy. If the exchange rejects it
 // because it would cross, the price is shifted down one tick and retried
-// (max 3), after which it is placed without the post-only flag.
-func placeLimitBuy(ctx context.Context, symbol string, priceS6, qtyS6 int64, coid string) error {
+// (max 3 post-only attempts), after which it is placed without the post-only flag.
+func placeLimitBuy(ctx context.Context, symbol string, priceS6, qtyS6 int64, coid string) (string, error) {
 	info := pairs[symbol]
 	price := priceS6
-	postOnly := true
 	for attempt := 0; attempt < 4; attempt++ {
+		postOnly := attempt < 3
+		attemptCoid := coid
+		if attempt > 0 {
+			attemptCoid = fmt.Sprintf("%s-r%d", coid, attempt)
+		}
 		wire := price * int64(math.Pow10(int(info.WireShift)))
 		pr := models.PriceFromTicksInt(wire)
 		qty, _ := models.NewQtyScaled(qtyS6)
@@ -591,25 +593,20 @@ func placeLimitBuy(ctx context.Context, symbol string, priceS6, qtyS6 int64, coi
 			Price:         &pr,
 			Qty:           models.QtyFromScaled(qty),
 			FeeAsset:      strPtr("quote"),
-			ClientOrderID: &coid,
+			ClientOrderID: &attemptCoid,
 		}
 		_, err := client.Orders.Create(ctx, req, nil)
 		if err == nil {
-			return nil
+			return attemptCoid, nil
 		}
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "post") || strings.Contains(msg, "would cross") || strings.Contains(msg, "would take") {
 			price -= info.TickTicks
-			postOnly = false
 			continue
 		}
-		if postOnly {
-			postOnly = false
-			continue
-		}
-		return err
+		return "", err
 	}
-	return fmt.Errorf("limit buy gagal setelah retry")
+	return "", fmt.Errorf("limit buy gagal setelah retry")
 }
 
 // placeLimitSell places a post-only GTC limit sell. If it would cross (price
@@ -620,6 +617,10 @@ func placeLimitSell(ctx context.Context, symbol string, priceS6, qtyS6 int64, co
 	price := priceS6
 	postOnly := true
 	for attempt := 0; attempt < 4; attempt++ {
+		attemptCoid := coid
+		if attempt > 0 {
+			attemptCoid = fmt.Sprintf("%s-r%d", coid, attempt)
+		}
 		wire := price * int64(math.Pow10(int(info.WireShift)))
 		pr := models.PriceFromTicksInt(wire)
 		qty, _ := models.NewQtyScaled(qtyS6)
@@ -633,7 +634,7 @@ func placeLimitSell(ctx context.Context, symbol string, priceS6, qtyS6 int64, co
 			Price:         &pr,
 			Qty:           models.QtyFromScaled(qty),
 			FeeAsset:      strPtr("quote"),
-			ClientOrderID: &coid,
+			ClientOrderID: &attemptCoid,
 		}
 		_, err := client.Orders.Create(ctx, req, nil)
 		if err == nil {
@@ -702,7 +703,7 @@ func cancelTrigger(id string) {
 	_, _ = client.Triggers.Cancel(context.Background(), nil, id, nil)
 }
 
-// bookTop returns mid price (true6) and best bid from the order book.
+// bookTop returns best bid and best ask in true6 scale (truePrice * 1e6) from the order book.
 func bookTop(ctx context.Context, info pairInfo) (float64, float64, error) {
 	ob, err := client.Orderbook.Get(ctx, info.Symbol, 5)
 	if err != nil {
@@ -711,9 +712,10 @@ func bookTop(ctx context.Context, info pairInfo) (float64, float64, error) {
 	if len(ob.Bids) == 0 || len(ob.Asks) == 0 {
 		return 0, 0, fmt.Errorf("book kosong")
 	}
-	bid := float64(ob.Bids[0].Price.Ticks()) / math.Pow10(int(info.WireShift))
-	ask := float64(ob.Asks[0].Price.Ticks()) / math.Pow10(int(info.WireShift))
-	return (bid + ask) / 2, bid, nil
+	div := math.Pow10(int(info.WireShift))
+	bid := float64(ob.Bids[0].Price.Ticks()) / div
+	ask := float64(ob.Asks[0].Price.Ticks()) / div
+	return bid, ask, nil
 }
 
 // budgetQty converts the quote budget into base qty (true6) at entry price.
@@ -753,7 +755,7 @@ func wireTicksToTrue6(wire int64, wireShift int64) int64 {
 }
 
 func baseBalance(ctx context.Context, info pairInfo) float64 {
-	bal, err := client.Balances.List(ctx, nil, nil)
+	bal, err := ledgerx.List(ctx, client)
 	if err != nil {
 		return -1
 	}
@@ -772,7 +774,7 @@ func baseBalance(ctx context.Context, info pairInfo) float64 {
 }
 
 func usdtBalance(ctx context.Context) float64 {
-	bal, err := client.Balances.List(ctx, nil, nil)
+	bal, err := ledgerx.List(ctx, client)
 	if err != nil {
 		return 0
 	}
@@ -888,7 +890,7 @@ func readCreds() (string, string) {
 func resolveSymbols(spotRaw map[string]any, raw string) []string {
 	if raw != "ALL" && raw != "" {
 		var out []string
-		for _, part := range strings.Split(raw, ",") {
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
 			if p := strings.TrimSpace(part); p != "" {
 				out = append(out, p)
 			}
@@ -1225,11 +1227,11 @@ func runMomentumCycle(ctx context.Context, symbol string, cycleNo int, info pair
 	lf := func(format string, a ...any) {
 		logf("%s "+format, append([]any{symbol}, a...)...)
 	}
-	bid, ask, err := bookTop(ctx, info)
+	_, ask, err := bookTop(ctx, info)
 	if err != nil {
 		return err
 	}
-	entryS6 := tickAlign((bid+ask)/2, info.TickTicks)
+	entryS6 := tickAlign(ask, info.TickTicks)
 	qtyS6 := budgetQtyWith(entryS6, envF("DIP_MOM_BUDGET", 500), info)
 	if qtyS6 < info.MinQtyS6 || notional(qtyS6, entryS6, info) < info.MinNotional {
 		return fmt.Errorf("momentum budget below pair minimum")

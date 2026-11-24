@@ -21,6 +21,8 @@ import (
 	"github.com/Fabric-Labs/polyester-sdk-go/codecs"
 
 	"polyester-momentum-bot/internal/execution"
+	"polyester-momentum-bot/internal/ledgerx"
+	"polyester-momentum-bot/internal/market"
 	"polyester-momentum-bot/internal/num"
 )
 
@@ -64,7 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	bal, err := client.Balances.List(ctx, nil, nil)
+	bal, err := ledgerx.List(ctx, client)
 	if err != nil {
 		fmt.Println("balances:", err)
 		os.Exit(1)
@@ -90,9 +92,17 @@ func main() {
 		return
 	}
 
+	slipBps := int32(200)
+	if rawSlip := strings.TrimSpace(os.Getenv("MAX_SLIPPAGE_BPS")); rawSlip != "" {
+		var parsed int
+		if _, err := fmt.Sscanf(rawSlip, "%d", &parsed); err == nil && parsed > 0 && parsed <= 10000 {
+			slipBps = int32(parsed)
+		}
+	}
 	sj := &sellJournal{}
-	exec := execution.NewLiveExecutor(client, mi, journalAdapter{j: sj}, nil, 50, 15)
-	fill, err := exec.Sell(ctx, baseScaled, fmt.Sprintf("pmom-manual-sell-%d", time.Now().Unix()))
+	exec := execution.NewLiveExecutor(client, mi, journalAdapter{j: sj}, nil, slipBps, 15)
+	exec.SetSkipPreview(true)
+	fill, err := exec.Sell(ctx, baseScaled, fmt.Sprintf("pmom-manual-sell-%d", time.Now().UnixNano()))
 	if err != nil {
 		fmt.Println("SELL GAGAL:", err)
 		os.Exit(1)
@@ -101,7 +111,7 @@ func main() {
 		num.FormatScaled(fill.BaseQtyScaled, mi.BaseScale), symbol,
 		num.FormatScaled(fill.AvgPriceScaled6, 6), fill.Status, fill.Partial, fill.OrderID)
 
-	if bal2, err := client.Balances.List(ctx, nil, nil); err == nil {
+	if bal2, err := ledgerx.List(ctx, client); err == nil {
 		for _, b := range bal2.Balances {
 			if b.AssetID == mi.QuoteAssetID {
 				t, _ := codecs.FormatLedgerU128(b.Trading, codecs.LedgerScale)
@@ -171,12 +181,23 @@ func marketInfo(ctx context.Context, client *polyester.Client, symbol string) (e
 	if baseID == 0 || quoteID == 0 {
 		return execution.MarketInfo{}, fmt.Errorf("asset id tidak ketemu untuk %s", symbol)
 	}
+	wireScale := 0
+	if rawWS := strings.TrimSpace(os.Getenv("POLYESTER_PRICE_SCALE")); rawWS != "" {
+		_, _ = fmt.Sscanf(rawWS, "%d", &wireScale)
+	}
+	if wireScale < 6 || wireScale > 12 {
+		if w, werr := market.DetectWirePriceScale(ctx, client, symbol, "1m", nil); werr == nil {
+			wireScale = w
+		} else {
+			wireScale = 9
+		}
+	}
 	minNotional, _ := num.ParseDecimalToScaled(pc.MinNotionalQuote, quoteScale)
 	return execution.MarketInfo{
 		Symbol: symbol, BaseScale: baseScale, QuoteScale: quoteScale,
 		TickTicks: pc.TickSizeTicks, MinQtyScaled: pc.MinQtyScaled,
 		MinNotionalQuoteScaled: minNotional, BaseAssetID: baseID, QuoteAssetID: quoteID,
-		WireScale: 9,
+		WireScale: wireScale,
 	}, nil
 }
 

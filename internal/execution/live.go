@@ -280,12 +280,31 @@ func rateLimitDelayOf(err error) time.Duration {
 func (l *LiveExecutor) observeFill(ctx context.Context, clientOrderID string) (*Fill, error) {
 	gr, err := l.client.Orders.WaitForOrderTradesComplete(ctx, nil, models.OrderKeyByClientID(clientOrderID), nil, l.fillWait)
 	if err != nil {
-		// Projection lag or timeout: take one authoritative read.
-		gr2, gerr := l.client.Orders.Get(ctx, nil, models.OrderKeyByClientID(clientOrderID), nil, false, false)
-		if gerr != nil {
+		// Projection lag or transient 503 on edge order projection: retry
+		// authoritative Orders.Get with progressive backoff before giving up.
+		backoffs := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1000 * time.Millisecond, 1500 * time.Millisecond, 2500 * time.Millisecond}
+		var gerr error
+		for i, wait := range backoffs {
+			gr2, e := l.client.Orders.Get(ctx, nil, models.OrderKeyByClientID(clientOrderID), nil, false, false)
+			if e == nil && gr2.Order != nil && (gr2.Order.Status == "filled" || gr2.Order.Status == "canceled" || i == len(backoffs)-1) {
+				gr = gr2
+				gerr = nil
+				break
+			}
+			if e != nil {
+				gerr = e
+			} else {
+				gr = gr2
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+		if gerr != nil && gr.Order == nil {
 			return nil, fmt.Errorf("fill observation failed: %v (last: %v)", gerr, err)
 		}
-		gr = gr2
 	}
 	if gr.Order == nil {
 		return nil, fmt.Errorf("fill observation: order %s not found", clientOrderID)
@@ -474,9 +493,14 @@ func (l *LiveExecutor) findTriggerByClientID(ctx context.Context, clientTriggerI
 // listTriggersAllStatuses pages triggers for our symbol across all lifecycle
 // statuses (List filters by exactly one status per call).
 func (l *LiveExecutor) listTriggersAllStatuses(ctx context.Context) ([]TriggerRef, error) {
+	statuses := []string{StatusCreated, StatusArmed, StatusRunning, StatusCompleted, StatusCancelled, StatusFailed, StatusPaused}
+	return l.listTriggersByStatuses(ctx, statuses)
+}
+
+// listTriggersByStatuses queries triggers for the requested statuses only.
+func (l *LiveExecutor) listTriggersByStatuses(ctx context.Context, statuses []string) ([]TriggerRef, error) {
 	var out []TriggerRef
 	sym := l.mi.Symbol
-	statuses := []string{StatusCreated, StatusArmed, StatusRunning, StatusCompleted, StatusCancelled, StatusFailed, StatusPaused}
 	for _, st := range statuses {
 		list, err := l.client.Triggers.List(ctx, nil, nil, &sym, []string{st}, 100, nil)
 		if err != nil {
@@ -523,23 +547,9 @@ func (l *LiveExecutor) TriggerStatus(ctx context.Context, triggerID string) (str
 	return t.Status, nil
 }
 
-// ActiveTriggers lists our triggers in active statuses.
+// ActiveTriggers lists our triggers in active statuses (3 calls instead of 7).
 func (l *LiveExecutor) ActiveTriggers(ctx context.Context) ([]TriggerRef, error) {
-	all, err := l.listTriggersAllStatuses(ctx)
-	if err != nil {
-		return nil, err
-	}
-	active := map[string]bool{}
-	for _, s := range ActiveTriggerStatuses() {
-		active[s] = true
-	}
-	var out []TriggerRef
-	for _, t := range all {
-		if active[t.Status] {
-			out = append(out, t)
-		}
-	}
-	return out, nil
+	return l.listTriggersByStatuses(ctx, ActiveTriggerStatuses())
 }
 
 // OpenOrders lists working orders owned by this bot (client ID prefix filter

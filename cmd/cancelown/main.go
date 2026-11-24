@@ -21,7 +21,10 @@ func main() {
 	if len(os.Args) > 1 {
 		prefix = os.Args[1]
 	}
-	raw, _ := os.ReadFile("/Users/jazeerahusna/.zcode/workspace/default/polyester-momentum-bot/.env")
+	raw, err := os.ReadFile(".env")
+	if err != nil {
+		raw, _ = os.ReadFile("/Users/jazeerahusna/.zcode/workspace/default/polyester-momentum-bot/.env")
+	}
 	var kid, priv string
 	for _, l := range strings.Split(string(raw), "\n") {
 		l = strings.TrimSpace(l)
@@ -40,9 +43,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_ = client.WaitForCatalogs(ctx)
 
 	open, err := client.Orders.ListOpen(ctx, nil, nil, nil, nil, false, false, nil)
 	if err != nil {

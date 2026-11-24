@@ -158,6 +158,30 @@ func TestEnsembleSuitedWeighting(t *testing.T) {
 	}
 }
 
+type fixedVoteStrategy struct {
+	name string
+	conf float64
+}
+
+func (f fixedVoteStrategy) Name() string             { return f.name }
+func (f fixedVoteStrategy) SuitedFor(_ Regime) float64 { return 1.0 }
+func (f fixedVoteStrategy) OnCandle(_ Candle) Vote {
+	return Vote{Strategy: f.name, Kind: "buy", Confidence: f.conf, Reason: "test"}
+}
+
+func TestEnsembleSelectsHighestScoreBuy(t *testing.T) {
+	s1 := fixedVoteStrategy{name: "weak_first", conf: 0.25}
+	s2 := fixedVoteStrategy{name: "strong_second", conf: 0.80}
+	e := NewEnsemble(0.5, s1, s2)
+	buy, _, _ := e.OnCandle(Candle{TsSec: 1, Close: 100}, RegimeRange)
+	if buy == nil {
+		t.Fatalf("expected combined buy vote")
+	}
+	if buy.Strategy != "strong_second" {
+		t.Fatalf("best strategy = %s, want strong_second", buy.Strategy)
+	}
+}
+
 func choppyCandles(n int) []Candle {
 	out := make([]Candle, n)
 	p := 100.0

@@ -580,12 +580,26 @@ func (b *Bot) loop() error {
 	defer riskTick.Stop()
 	reconTick := time.NewTicker(15 * time.Second)
 	defer reconTick.Stop()
-	var deadManTick *time.Ticker
-	var deadManC <-chan time.Time
 	if b.cfg.Mode == config.ModeLive && b.deadManArmed {
-		deadManTick = time.NewTicker(time.Duration(b.cfg.DeadManRefreshSec) * time.Second)
-		defer deadManTick.Stop()
-		deadManC = deadManTick.C
+		// Refresh dead-man switch on an independent goroutine so slow REST calls
+		// or fill observations on the main event loop can never delay the
+		// heartbeat past DeadManTimeoutSec.
+		go func() {
+			deadManTick := time.NewTicker(time.Duration(b.cfg.DeadManRefreshSec) * time.Second)
+			defer deadManTick.Stop()
+			for {
+				select {
+				case <-b.runCtx.Done():
+					return
+				case <-deadManTick.C:
+					dctx, dcancel := context.WithTimeout(b.runCtx, 5*time.Second)
+					if err := b.syms[0].exec.RefreshDeadMan(dctx); err != nil && b.runCtx.Err() == nil {
+						b.log.Printf("[WARN] dead-man refresh failed: %v", err)
+					}
+					dcancel()
+				}
+			}
+		}()
 	}
 	reconIdx := 0
 
@@ -616,11 +630,6 @@ func (b *Bot) loop() error {
 				rctx, rcancel := context.WithTimeout(b.opCtx, 60*time.Second)
 				b.reconcile(rctx, s)
 				rcancel()
-			}
-
-		case <-deadManC:
-			if err := b.syms[0].exec.RefreshDeadMan(b.opCtx); err != nil {
-				b.log.Printf("[WARN] dead-man refresh failed: %v", err)
 			}
 		}
 	}

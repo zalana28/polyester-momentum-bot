@@ -1,7 +1,11 @@
 .env
-logs/
-state*/
-bin/
+.env.bak.*
+/logs/
+/state*/
+/bin/
+/churnvol
+/dashboard
+/probe
 .DS_Store
 *.pyc
 __pycache__/
